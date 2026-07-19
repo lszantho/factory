@@ -129,6 +129,21 @@ function latestRejectionTag(config, prNumber) {
   return lastRejection.body?.includes('[architectural]') ? 'architectural' : 'quality';
 }
 
+// GitHub blocks an account from approving its own PR — every role otherwise shares Lucian's
+// own gh identity, so the reviewer needs a distinct account's token to ever submit a real
+// review. Only the reviewer dispatch gets this; architect/developer are untouched.
+function reviewerGhEnv(config, role) {
+  if (role !== 'reviewer' || !config.reviewerGhTokenPath) {
+    return {};
+  }
+  try {
+    const token = fs.readFileSync(config.reviewerGhTokenPath, 'utf-8').trim();
+    return token ? { GH_TOKEN: token } : {};
+  } catch {
+    return {};
+  }
+}
+
 function dispatch(config, state, { role, sessionName, prompt, worktree, fromPr }) {
   if (hasRunningSession(config, sessionName)) {
     return { dispatched: false, reason: 'session-already-running' };
@@ -159,7 +174,7 @@ function dispatch(config, state, { role, sessionName, prompt, worktree, fromPr }
     cwd: config.repoDir,
     encoding: 'utf-8',
     timeout: 60_000,
-    env: { ...process.env, FACTORY_DISPATCH: '1' }
+    env: { ...process.env, FACTORY_DISPATCH: '1', ...reviewerGhEnv(config, role) }
   });
   const spawned = claudeAgentsJson(config).find((s) => s.name === sessionName);
   return { dispatched: true, sessionId: spawned?.sessionId, pid: spawned?.pid };
