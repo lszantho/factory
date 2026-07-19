@@ -81,7 +81,9 @@ function claudeAgentsJson(config) {
 }
 
 function hasRunningSession(config, sessionName) {
-  return claudeAgentsJson(config).some((s) => s.name === sessionName && s.kind === 'background');
+  // `claude agents --json` keeps a record around after its process has died (no `pid` field
+  // in that case) — matching on kind+name alone treats a long-dead session as still running.
+  return claudeAgentsJson(config).some((s) => s.name === sessionName && s.kind === 'background' && s.pid);
 }
 
 function findPrForBranch(config, branch) {
