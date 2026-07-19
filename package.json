@@ -1,0 +1,10 @@
+{
+  "name": "factory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous multi-agent development orchestrator (architect/developer/reviewer), config-driven per target repo.",
+  "type": "module",
+  "scripts": {
+    "tick": "node orchestrator.mjs"
+  }
+}

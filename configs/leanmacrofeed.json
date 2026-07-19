@@ -1,0 +1,17 @@
+{
+  "repoDir": "/Users/lucian/Works/LeanMacroFeed",
+  "repo": "lszantho/lean-macro-feed",
+  "dryRun": false,
+  "autoMerge": false,
+  "budget": {
+    "maxDispatchesPerWindow": 8,
+    "windowMinutes": 300
+  },
+  "staleSessionMinutes": 30,
+  "paths": {
+    "node": "/Users/lucian/.local/share/fnm/node-versions/v24.18.0/installation/bin/node",
+    "dabEntry": "/Users/lucian/Works/docs-as-board/docs-as-board-node/dist/bin/index.js",
+    "claude": "/opt/homebrew/bin/claude",
+    "gh": "/opt/homebrew/bin/gh"
+  }
+}
