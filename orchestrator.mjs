@@ -80,10 +80,26 @@ function claudeAgentsJson(config) {
   }
 }
 
+function isPidThisSession(pid, sessionId) {
+  // A bare "does this pid exist" check isn't enough — macOS recycles pids, and one was observed
+  // reused by an unrelated `claude --bg-spare` warm-pool process minutes after the original
+  // session died, which would make a pid-only check report a long-dead session as running.
+  // Confirming the live process's own command line still references this exact session id
+  // rules out a coincidental pid reuse.
+  try {
+    const cmd = execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' });
+    return cmd.includes(sessionId);
+  } catch {
+    return false;
+  }
+}
+
 function hasRunningSession(config, sessionName) {
-  // `claude agents --json` keeps a record around after its process has died (no `pid` field
-  // in that case) — matching on kind+name alone treats a long-dead session as still running.
-  return claudeAgentsJson(config).some((s) => s.name === sessionName && s.kind === 'background' && s.pid);
+  // `claude agents --json`'s own bookkeeping can be stale — it has been observed reporting a
+  // pid for a session whose process had already exited. Don't trust the JSON's pid field alone.
+  return claudeAgentsJson(config).some(
+    (s) => s.name === sessionName && s.kind === 'background' && s.pid && isPidThisSession(s.pid, s.sessionId)
+  );
 }
 
 function findPrForBranch(config, branch) {
