@@ -241,9 +241,13 @@ function inFlightAction(config, taskId, task, titleHint) {
       role: 'reviewer',
       taskId,
       sessionName: `factory-reviewer-${taskId}`,
-      fromPr: pr.number,
+      // No --from-pr here: it resumes a session already associated with the PR, but the
+      // reviewer's first look at any given PR has no such session to resume — it was observed
+      // falling back to an interactive picker (per --help: "...or open interactive picker"),
+      // which hangs forever with no TTY attached in --bg mode. A plain dispatch in the main
+      // checkout reviewing via `gh pr diff`/`gh pr view` (per reviewer.md) avoids that entirely.
       reason: 'ready-for-review',
-      prompt: `Review PR #${pr.number} for task "${titleHint ?? taskId}" per your role instructions.`
+      prompt: `Review PR #${pr.number} for task "${titleHint ?? taskId}" per your role instructions. Use \`gh pr diff ${pr.number}\` and \`gh pr view ${pr.number}\` to inspect it remotely — no local checkout needed.`
     };
   }
 
