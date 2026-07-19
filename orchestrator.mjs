@@ -95,10 +95,14 @@ function findPrForBranch(config, branch) {
   return prs[0] ?? null;
 }
 
+const CI_BAD_CONCLUSIONS = new Set(['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE']);
+
 function isCiGreen(pr) {
   const rollup = pr.statusCheckRollup ?? [];
   if (rollup.length === 0) return false;
-  return rollup.every((c) => (c.conclusion ?? c.state) === 'SUCCESS');
+  // SKIPPED is common and benign here (deploy jobs that only run on pushes to main, not PRs) —
+  // only a genuinely bad conclusion should count as red, not "not literally SUCCESS".
+  return rollup.every((c) => !CI_BAD_CONCLUSIONS.has((c.conclusion ?? c.state ?? '').toUpperCase()));
 }
 
 function latestRejectionTag(config, prNumber) {
