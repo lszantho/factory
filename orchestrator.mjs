@@ -175,7 +175,7 @@ function inFlightAction(config, taskId, task, titleHint) {
         role: task.lastRole ?? 'developer',
         taskId,
         sessionName,
-        worktree: task.branch,
+        worktree: task.worktreeName,
         reason: 'retry-no-pr',
         prompt: `Resume the task "${titleHint ?? taskId}" on branch ${task.branch} — no PR was found after the previous dispatch and the session is no longer running. Finish the work and open a PR.`,
         onDispatched: () => { task.lastDispatchedAt = Date.now(); }
@@ -265,7 +265,7 @@ function decide(config, state) {
       worktree: taskId,
       reason: 'epic-closing',
       prompt: `The epic "${closableEpic.id}" (${closableEpic.title}) has no remaining open tasks. Review it end-to-end per your role instructions and, if it genuinely delivered what its overview.md proposed, run \`dab epic close ${closableEpic.id}\` and open a PR for the archive move. Spec: ${closableEpic.spec}`,
-      onDispatched: () => { task.branch = taskId; task.lastRole = 'architect'; task.kind = 'board-change'; task.lastDispatchedAt = Date.now(); }
+      onDispatched: () => { task.branch = `worktree-${taskId}`; task.worktreeName = taskId; task.lastRole = 'architect'; task.kind = 'board-change'; task.lastDispatchedAt = Date.now(); }
     };
   }
 
@@ -286,7 +286,7 @@ function decide(config, state) {
       worktree: taskId,
       reason: 'needs-design-assessment',
       prompt: `Assess the backlog item "${next.title}" (spec: ${next.spec ?? 'none yet'}). Decide whether it's simple enough to graduate straight to dab/todos/, or whether it needs an RFC + epic first per your role instructions. Open a PR for whatever dab/ changes you make.`,
-      onDispatched: () => { task.branch = taskId; task.lastRole = 'architect'; task.kind = 'board-change'; task.lastDispatchedAt = Date.now(); }
+      onDispatched: () => { task.branch = `worktree-${taskId}`; task.worktreeName = taskId; task.lastRole = 'architect'; task.kind = 'board-change'; task.lastDispatchedAt = Date.now(); }
     };
   }
 
@@ -303,7 +303,7 @@ function decide(config, state) {
     worktree: taskId,
     reason: 'new-task',
     prompt: `Implement the task "${next.title}" (id: ${taskId}). Spec: ${next.spec}. Follow your role instructions end-to-end: implement, test, validate, commit, push, and open a PR.`,
-    onDispatched: () => { task.branch = taskId; task.lastRole = 'developer'; task.kind = 'dab-task'; task.lastDispatchedAt = Date.now(); }
+    onDispatched: () => { task.branch = `worktree-${taskId}`; task.worktreeName = taskId; task.lastRole = 'developer'; task.kind = 'dab-task'; task.lastDispatchedAt = Date.now(); }
   };
 }
 
