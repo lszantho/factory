@@ -2,7 +2,7 @@
   "repoDir": "/Users/lucian/Works/LeanMacroFeed",
   "repo": "lszantho/lean-macro-feed",
   "dryRun": false,
-  "autoMerge": true,
+  "autoMerge": false,
   "maxConcurrentTasks": 1,
   "budget": {
     "maxDispatchesPerWindow": 8,
