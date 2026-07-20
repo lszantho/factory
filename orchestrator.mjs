@@ -7,6 +7,7 @@
 // (Autonomous Factory Mode) for the rules dispatched sessions operate under.
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -80,25 +81,39 @@ function claudeAgentsJson(config) {
   }
 }
 
-function isPidThisSession(pid, sessionId) {
-  // A bare "does this pid exist" check isn't enough — macOS recycles pids, and one was observed
-  // reused by an unrelated `claude --bg-spare` warm-pool process minutes after the original
-  // session died, which would make a pid-only check report a long-dead session as running.
-  // Confirming the live process's own command line still references this exact session id
-  // rules out a coincidental pid reuse.
+// Every background session appends to a live transcript at
+// ~/.claude/projects/<cwd, non-alphanumerics turned into "-">/<sessionId>.jsonl as it works —
+// a far more reliable liveness signal than the pid `claude agents --json` reports. A pid-only
+// check ("does this process exist") is wrong because macOS recycles pids and one was observed
+// reused by an unrelated `claude --bg-spare` warm-pool process within minutes of the original
+// session dying. The fix for *that* (confirming the live process's command line still mentions
+// the session id) is wrong in the other direction: a `--bg-spare` process, once claimed and put
+// to work on a real session, keeps its original "--bg-spare ...claim.sock" argv forever — so
+// that check reports a session as "not running" while `claude logs <id>` shows it actively
+// streaming tool calls. Transcript mtime has neither failure mode: it's silent exactly when the
+// session is silent.
+function sessionTranscriptPath(cwd, sessionId) {
+  const projectDir = cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  return path.join(os.homedir(), '.claude', 'projects', projectDir, `${sessionId}.jsonl`);
+}
+
+function sessionRecentlyActive(cwd, sessionId, withinMinutes) {
   try {
-    const cmd = execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' });
-    return cmd.includes(sessionId);
+    const { mtimeMs } = fs.statSync(sessionTranscriptPath(cwd, sessionId));
+    return Date.now() - mtimeMs < withinMinutes * 60 * 1000;
   } catch {
     return false;
   }
 }
 
 function hasRunningSession(config, sessionName) {
-  // `claude agents --json`'s own bookkeeping can be stale — it has been observed reporting a
-  // pid for a session whose process had already exited. Don't trust the JSON's pid field alone.
   return claudeAgentsJson(config).some(
-    (s) => s.name === sessionName && s.kind === 'background' && s.pid && isPidThisSession(s.pid, s.sessionId)
+    (s) =>
+      s.name === sessionName &&
+      s.kind === 'background' &&
+      s.cwd &&
+      s.sessionId &&
+      sessionRecentlyActive(s.cwd, s.sessionId, config.staleSessionMinutes ?? 30)
   );
 }
 
