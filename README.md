@@ -33,7 +33,7 @@ A **tick** (no flag) prints a single JSON decision line (also appended to `logs/
 | --- | --- |
 | `orchestrator.mjs` | The whole decision engine — one tick per invocation. Deterministic, no LLM call. |
 | `budget-guard.mjs` | Rolling-window cap on dispatches, so a runaway loop can't spend without bound. |
-| `configs/<repo>.json` | Per-target-repo config: paths, thresholds, `autoMerge`, budget, reviewer token path. |
+| `configs/<repo>.json` | Per-target-repo config: paths, thresholds, `autoMerge`, `maxConcurrentTasks` (WIP cap, default 1), budget, reviewer token path. |
 | `state/<repo>.json` | The orchestrator's *only* cross-tick memory: which task → which branch/role. Gitignored. |
 | `logs/<repo>.jsonl` | Append-only audit trail of every decision. Gitignored. |
 | `docs/` | Architecture, the state machine, the design principles, and ADRs (below). |
@@ -45,6 +45,7 @@ The **agent personas** (`architect.md` / `developer.md` / `reviewer.md`) and the
 - **[docs/architecture/PRINCIPLES.md](docs/architecture/PRINCIPLES.md)** — the design philosophy. Why the "process" is deliberately implicit, and why deriving state from reality (rather than storing it) is what makes the system resilient. Start here.
 - **[docs/architecture/STATE_MACHINE.md](docs/architecture/STATE_MACHINE.md)** — the tick priority order and the per-task lifecycle, as diagrams, plus a "when do I run it?" cheat sheet.
 - **[docs/architecture/adr/](docs/architecture/adr/README.md)** — Architecture Decision Records: the specific, load-bearing decisions and the reasoning behind them.
+- **[docs/rfcs/](docs/rfcs/README.md)** — design proposals for larger future work (e.g. [RFC 001: parallel task execution](docs/rfcs/RFC_001_PARALLEL_TASK_EXECUTION.md)).
 
 ## Operational status
 

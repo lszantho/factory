@@ -367,8 +367,22 @@ function decide(config, state) {
   // `dab status`'s activeTasks reliably maps spec path -> real frontmatter id, so fall back to it.
   const specToId = new Map(statusPayload.activeTasks.map((t) => [t.spec, t.id]));
 
+  // WIP cap: only START new work while under the concurrent-in-flight limit. "In flight" = tracked
+  // in state.json with a branch (its worktree/PR lifecycle is underway). Default 1 = single-track,
+  // i.e. today's behaviour. The in-flight loop above always runs first, so already-started work
+  // keeps advancing regardless of this cap — the cap only gates *starting* something new. Raising it
+  // is the WIP half of parallelism; the fan-out to *different* ready tasks also needs dab to exclude
+  // in-flight tasks / return a ready-list, which it can't yet — see docs/rfcs/RFC_001.
+  const inFlightIds = Object.keys(state.tasks).filter((id) => state.tasks[id].branch);
+  const wipLimit = config.maxConcurrentTasks ?? 1;
+  if (inFlightIds.length >= wipLimit) {
+    return { action: 'wait', reason: 'wip-limit-reached', detail: `${inFlightIds.length}/${wipLimit} in flight` };
+  }
+
   const closableEpic = findClosableEpic(statusPayload);
-  if (closableEpic) {
+  // Skip if this epic's close is already in flight (its close PR is tracked) — the in-flight loop is
+  // already driving it; re-dispatching would duplicate it. Fall through to any other ready work.
+  if (closableEpic && !state.tasks[`epic-close-${closableEpic.id}`]?.branch) {
     const taskId = `epic-close-${closableEpic.id}`;
     const task = state.tasks[taskId] ?? { branch: null, rejectionCount: 0 };
     state.tasks[taskId] = task;
@@ -391,6 +405,12 @@ function decide(config, state) {
 
   if (next.source === 'backlog') {
     const taskId = next.id ?? next.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    // Dedup: if dab next handed back a task already in flight, don't re-dispatch it. (With today's
+    // dab next this is also why raising the WIP cap won't fan out to a *different* task yet — it
+    // keeps returning the same still-"active"-on-main task. RFC_001 covers the dab-side fix.)
+    if (state.tasks[taskId]?.branch) {
+      return { action: 'wait', reason: 'next-task-already-in-flight', taskId };
+    }
     const task = state.tasks[taskId] ?? { branch: null, rejectionCount: 0 };
     state.tasks[taskId] = task;
     return {
@@ -407,6 +427,10 @@ function decide(config, state) {
 
   // source === 'epic': a concrete task with a spec under todos/, not yet started
   const taskId = next.id ?? specToId.get(next.spec) ?? path.basename(next.spec, '.md');
+  // Dedup (also the ADR-008 latent-bug fix): never re-dispatch a task already in flight.
+  if (state.tasks[taskId]?.branch) {
+    return { action: 'wait', reason: 'next-task-already-in-flight', taskId };
+  }
   const task = state.tasks[taskId] ?? { branch: null, rejectionCount: 0 };
   state.tasks[taskId] = task;
 

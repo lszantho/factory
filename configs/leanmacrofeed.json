@@ -3,6 +3,7 @@
   "repo": "lszantho/lean-macro-feed",
   "dryRun": false,
   "autoMerge": true,
+  "maxConcurrentTasks": 1,
   "budget": {
     "maxDispatchesPerWindow": 8,
     "windowMinutes": 300
