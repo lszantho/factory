@@ -118,12 +118,21 @@ function hasRunningSession(config, sessionName) {
 }
 
 function findPrForBranch(config, branch) {
+  // `--state all`, not just `open`: a PR can close via GitHub's web UI, `gh pr merge`/`close` run
+  // directly (bypassing this orchestrator entirely), or auto-merge — any channel. GitHub keeps
+  // the PR record (and its head branch name) forever regardless of which of those happened or
+  // whether the branch itself still exists, so this is the durable source of truth for "did this
+  // land," not a commit-SHA check: every merge here is a squash merge, which fabricates a new
+  // commit on main rather than replaying the branch's own commits, so a branch-tip-in-main-history
+  // check would misreport every legitimately-merged PR as unmerged.
   const raw = runGh(config, [
-    'pr', 'list', '--repo', config.repo, '--head', branch, '--state', 'open',
-    '--json', 'number,state,reviewDecision,statusCheckRollup,mergeable'
+    'pr', 'list', '--repo', config.repo, '--head', branch, '--state', 'all',
+    '--json', 'number,state,reviewDecision,statusCheckRollup,mergeable,mergedAt'
   ]);
   const prs = JSON.parse(raw || '[]');
-  return prs[0] ?? null;
+  // A branch name can be reused across retries, so more than one PR may share it — the most
+  // recent (highest PR number) is the one that matters.
+  return [...prs].sort((a, b) => b.number - a.number)[0] ?? null;
 }
 
 const CI_BAD_CONCLUSIONS = new Set(['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE']);
@@ -191,7 +200,15 @@ function dispatch(config, state, { role, sessionName, prompt, worktree, fromPr }
     timeout: 60_000,
     env: { ...process.env, FACTORY_DISPATCH: '1', ...reviewerGhEnv(config, role) }
   });
-  const spawned = claudeAgentsJson(config).find((s) => s.name === sessionName);
+  // `claude agents --json --all` never prunes finished sessions, so a taskId/role combo that's
+  // been dispatched before (retry, address-feedback, mediate-rejection, ...) reuses the same
+  // deterministic sessionName and now has multiple entries in the list sharing it. Taking the
+  // first match is wrong — it can silently resolve to a long-finished session instead of the one
+  // just spawned (observed directly: a stale morning session's id got logged instead of the new
+  // one). The one we just started is the most recent by startedAt.
+  const spawned = claudeAgentsJson(config)
+    .filter((s) => s.name === sessionName)
+    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0];
   return { dispatched: true, sessionId: spawned?.sessionId, pid: spawned?.pid };
 }
 
@@ -213,6 +230,18 @@ function findClosableEpic(statusPayload) {
  */
 function inFlightAction(config, taskId, task, titleHint) {
   const pr = findPrForBranch(config, task.branch);
+
+  if (pr?.state === 'MERGED') {
+    return { action: 'reconcile-merged', taskId, prNumber: pr.number };
+  }
+  if (pr?.state === 'CLOSED') {
+    // Closed without merging — nothing shipped, so this isn't "done" like MERGED, but it also
+    // isn't safe to silently retry (might duplicate already-abandoned work) or leave circling
+    // through no-PR retry logic (findPrForBranch would keep finding this same closed PR forever,
+    // never falling into the !pr branch). Surface it; a human decides reopen vs. redo vs. drop.
+    return { action: 'blocked', reason: 'pr-closed-without-merge', taskId, prNumber: pr.number };
+  }
+
   if (!pr) {
     const sessionName = `factory-${task.lastRole ?? 'developer'}-${taskId}`;
     const stale = task.lastDispatchedAt && Date.now() - task.lastDispatchedAt > (config.staleSessionMinutes ?? 30) * 60 * 1000;
@@ -389,8 +418,11 @@ function main() {
   }
 
   if (decision.action === 'blocked') {
-    logDecision({ decisionId, type: 'blocked', reason: decision.reason, detail: decision.detail });
-    notify('Factory blocked', `dab check found issues in ${repoConfigName} — see factory/logs/${repoConfigName}.jsonl`);
+    logDecision({ decisionId, type: 'blocked', reason: decision.reason, detail: decision.detail, taskId: decision.taskId, prNumber: decision.prNumber });
+    const message = decision.reason === 'pr-closed-without-merge'
+      ? `${repoConfigName}: PR #${decision.prNumber} for "${decision.taskId}" was closed without merging — needs a human call (reopen, redo, or drop the task).`
+      : `dab check found issues in ${repoConfigName} — see factory/logs/${repoConfigName}.jsonl`;
+    notify('Factory blocked', message);
     saveState(state);
     return;
   }
@@ -424,6 +456,21 @@ function main() {
     delete state.tasks[decision.taskId];
     logDecision({ decisionId, type: 'merged', taskId: decision.taskId, prNumber: decision.prNumber });
     notify('Factory: merged', `${repoConfigName}: ${decision.taskId} merged and archived.`);
+    saveState(state);
+    return;
+  }
+
+  if (decision.action === 'reconcile-merged') {
+    // The PR landed through a channel other than this orchestrator's own 'merge' action above —
+    // a human running `gh pr merge` or clicking Merge on GitHub directly, most likely. Catch
+    // state up to match reality (same cleanup the 'merge' branch does, minus the merge itself,
+    // which already happened) instead of treating "no open PR" as "still needs work" and
+    // redispatching over already-finished work.
+    if (state.tasks[decision.taskId]?.kind === 'dab-task') {
+      runDab(config, ['complete', decision.taskId]);
+    }
+    delete state.tasks[decision.taskId];
+    logDecision({ decisionId, type: 'reconciled-merged', taskId: decision.taskId, prNumber: decision.prNumber });
     saveState(state);
     return;
   }
