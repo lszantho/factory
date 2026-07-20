@@ -14,7 +14,9 @@ The orchestrator checks things in a strict order and stops at the first thing th
 flowchart TD
     Start(["node orchestrator.mjs &lt;repo&gt;"]) --> A{gh auth ok?}
     A -- no --> BlockedAuth["blocked: gh-not-authenticated"]
-    A -- yes --> B{dispatch budget<br/>has headroom?}
+    A -- yes --> S{fast-forward target<br/>checkout to origin?}
+    S -- can't --> BlockedSync["blocked: repo-sync-failed<br/>don't decide against a stale board"]
+    S -- ok --> B{dispatch budget<br/>has headroom?}
     B -- no --> BlockedBudget["blocked: budget-exceeded<br/>wait for the window to roll over"]
     B -- yes --> C{dab check clean?}
     C -- issues --> BlockedCheck["blocked: dab-check-issues<br/>fix the repo's dab/ bookkeeping first"]
@@ -52,7 +54,7 @@ stateDiagram-v2
 
     Approved --> ReadyToMerge: CI green
     ReadyToMerge --> ReadyToMerge: autoMerge off — YOU merge it (gh pr merge / GitHub UI)
-    ReadyToMerge --> Reconciled: next tick sees PR is MERGED → dab complete + state cleared
+    ReadyToMerge --> Reconciled: PR MERGED → state cleared (completion already rode in with the PR)
     Reconciled --> [*]
 ```
 
@@ -72,7 +74,7 @@ Note that a PR closed or merged **through any channel** — GitHub's web UI, `gh
 | A background session finished (`claude agents --json` shows `idle`/`done`, or check `claude logs <id>`) | Run it — it notices the resulting PR and dispatches the reviewer once CI is green |
 | A review just landed (approved or changes-requested) | Run it — dispatches developer/architect to fix, or (with `autoMerge` on) merges the approved, green PR itself |
 | CI still running on an open PR | Running now just reports `wait` — nothing to do until CI finishes |
-| A PR is approved + green (`autoMerge: true`, current) | Run it — the tick merges it (squash + delete branch), runs `dab complete`, clears state, all in one step |
+| A PR is approved + green (`autoMerge: true`, current) | Run it — the tick merges it (squash + delete branch) and clears state; completion was already part of the PR |
 | You see `would-merge` (only if `autoMerge` were off) | **You** run `gh pr merge <PR>` yourself, then run the tick again so it reconciles state |
 | You merged a PR yourself, outside the orchestrator | Run it — the next tick reconciles state (`reconciled-merged`) before considering anything else |
 | An epic's last task just got reconciled | Run it again — *this* tick notices zero remaining tasks and dispatches the architect to close the epic |
@@ -89,7 +91,7 @@ Every tick logs one JSON line to `logs/<repo>.jsonl` with a `type`:
 | `skipped-dispatch` | Wanted to dispatch but a same-named session is already running |
 | `wait` | Something's in progress (CI, a running session) — nothing to do yet |
 | `would-merge` | A PR is approved + green and ready; `autoMerge` off, so waiting on a human |
-| `reconciled-merged` | Noticed a PR merged out-of-band; caught state up (`dab complete` + cleared) |
+| `reconciled-merged` | Noticed a PR merged out-of-band; cleared state (completion was part of the PR) |
 | `merged` | The orchestrator merged it itself (only when `autoMerge` is on) |
 | `blocked` | Can't proceed: gh auth, budget, dab-check issues, or a PR closed without merging |
 | `idle` | Nothing to do at all |

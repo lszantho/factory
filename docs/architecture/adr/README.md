@@ -13,6 +13,7 @@ These are the concrete decisions; the shared philosophy behind them lives in [..
 | [005](ADR_005_LIVENESS_FROM_TRANSCRIPT_MTIME.md) | Detect a running session by transcript mtime, not PID | Approved | `claude agents --json`'s pid is unreliable in both directions (recycled pids; warm-pool argv). The live session transcript's mtime is silent exactly when the session is silent. |
 | [006](ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md) | A human merge gate and a dispatch budget while the pipeline matures | Approved | `autoMerge` off (humans gate the one irreversible step), a rolling dispatch cap, and manual ticks as a circuit-breaker. Deliberately relaxable as trust is earned, not permanent. |
 | [007](ADR_007_BYPASS_PERMISSIONS_FOR_DISPATCH.md) | `bypassPermissions` for background dispatches | Approved | A `--bg` session can't answer interactive prompts, so `acceptEdits` would deadlock it. The target repo's `AGENTS.md` §6 + `--disallowedTools` are the real safety net, not an interactive gate. |
+| [008](ADR_008_READ_ONLY_CHECKOUT_COMPLETION_IN_PR.md) | Orchestrator only reads and fast-forwards the target checkout; completion flows through the PR | Approved | The orchestrator never writes to the local checkout: the developer marks its task done inside its PR (like epic-close already does), and a tick fast-forwards the checkout to origin before observing. Kills local staleness and dirty-tree drift by construction. |
 
 ## When to write a new ADR
 

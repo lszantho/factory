@@ -80,6 +80,31 @@ function ghAuthOk(config) {
   }
 }
 
+// The orchestrator reads `dab` from the target repo's local `main` checkout, but merges land on
+// `origin` (via `gh pr merge`, a remote call that never touches the local working tree). Git does
+// not auto-pull, so the local checkout falls behind origin after every merge and `dab` reports a
+// pre-merge board until it's synced. Fast-forward it to origin before observing, so every decision
+// is made against current reality. This is only safe because the orchestrator *never writes* to
+// this checkout — task completion flows through the developer's PR, not a post-merge mutation here
+// (see ADR 008) — so the checkout can only ever be behind origin, never divergent, and a clean
+// `--ff-only` always succeeds.
+function syncTargetRepo(config) {
+  try {
+    execFileSync('git', ['-C', config.repoDir, 'pull', '--ff-only'], { encoding: 'utf-8', timeout: 60_000 });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err?.stderr || err?.message || err).trim().split('\n').slice(-3).join(' ') };
+  }
+}
+
+function repoHead(config) {
+  try {
+    return execFileSync('git', ['-C', config.repoDir, 'log', '-1', '--format=%h %s'], { encoding: 'utf-8', timeout: 15_000 }).trim();
+  } catch {
+    return '(unknown)';
+  }
+}
+
 function claudeAgentsJson(config) {
   try {
     return JSON.parse(execFileSync(config.paths.claude, ['agents', '--json', '--all'], { encoding: 'utf-8', timeout: 15_000 }));
@@ -431,8 +456,12 @@ function renderStatus(config) {
   out.push(`Factory status — ${repoConfigName}    ${now}`);
 
   const authOk = ghAuthOk(config);
+  // Same fast-forward a tick does, so the monitor reports against current reality rather than a
+  // stale local board. Read-only in intent: --ff-only can only receive what origin already has.
+  const sync = authOk ? syncTargetRepo(config) : { ok: false, error: 'gh not authenticated' };
   const budget = budgetStatus(state, config);
   out.push(`gh auth: ${authOk ? 'ok' : 'NOT AUTHENTICATED'}    budget: ${budget.count}/${budget.cap} in ${config.budget?.windowMinutes ?? 300}m    autoMerge: ${config.autoMerge ? 'on' : 'off'}`);
+  out.push(`repo: ${repoHead(config)}${sync.ok ? '' : `   ⚠ NOT SYNCED to origin (${sync.error}) — showing local state`}`);
   out.push('');
 
   const taskIds = Object.keys(state.tasks).sort();
@@ -455,6 +484,7 @@ function renderStatus(config) {
   // Mirror main()'s guard order exactly, on a clone so decide()'s bookkeeping never persists.
   let decision;
   if (!authOk) decision = { action: 'blocked', reason: 'gh-not-authenticated' };
+  else if (!sync.ok) decision = { action: 'blocked', reason: `repo-sync-failed: ${sync.error}` };
   else if (!budget.allowed) decision = { action: 'blocked', reason: 'budget-exceeded' };
   else {
     try { decision = decide(config, structuredClone(state)); }
@@ -495,6 +525,17 @@ function main() {
 
   if (!ghAuthOk(config)) {
     logDecision({ decisionId, type: 'blocked', reason: 'gh-not-authenticated' });
+    return;
+  }
+
+  // Observe current reality, not a pre-merge snapshot. If the checkout can't be fast-forwarded to
+  // origin, decisions about what work to start next (findClosableEpic, dab next) would run against
+  // stale files — the exact cause of a spurious "re-close an already-closed epic" dispatch — so
+  // stop rather than act on a stale board.
+  const sync = syncTargetRepo(config);
+  if (!sync.ok) {
+    logDecision({ decisionId, type: 'blocked', reason: 'repo-sync-failed', detail: sync.error });
+    notify('Factory blocked', `${repoConfigName}: couldn't fast-forward ${config.repoDir} to origin — ${sync.error}`);
     return;
   }
 
@@ -545,12 +586,10 @@ function main() {
       return;
     }
     runGh(config, ['pr', 'merge', String(decision.prNumber), '--squash', '--delete-branch', '--repo', config.repo]);
-    // Only real dab todo/epic-todo tasks get `dab complete`; RFC/backlog-graduation/epic-close
-    // PRs ("board-change") already applied their dab/** change inside the dispatched session —
-    // there's nothing left to mark done, `dab complete` would just fail to find a matching task.
-    if (state.tasks[decision.taskId]?.kind === 'dab-task') {
-      runDab(config, ['complete', decision.taskId]);
-    }
+    // No `dab complete` here. Task completion is part of the developer's PR — the WORK_PLAN box is
+    // checked / the task archived inside the worktree and reviewed, so it lands on main atomically
+    // with the merge (ADR 008). The orchestrator only reads and fast-forwards this checkout, never
+    // writes to it; the next tick's sync reflects the completion.
     delete state.tasks[decision.taskId];
     logDecision({ decisionId, type: 'merged', taskId: decision.taskId, prNumber: decision.prNumber });
     notify('Factory: merged', `${repoConfigName}: ${decision.taskId} merged and archived.`);
@@ -564,9 +603,8 @@ function main() {
     // state up to match reality (same cleanup the 'merge' branch does, minus the merge itself,
     // which already happened) instead of treating "no open PR" as "still needs work" and
     // redispatching over already-finished work.
-    if (state.tasks[decision.taskId]?.kind === 'dab-task') {
-      runDab(config, ['complete', decision.taskId]);
-    }
+    // Completion rode in with the merged PR (ADR 008) — nothing to mark done here. Just catch
+    // state up to the reality that this PR already merged (through whatever channel).
     delete state.tasks[decision.taskId];
     logDecision({ decisionId, type: 'reconciled-merged', taskId: decision.taskId, prNumber: decision.prNumber });
     saveState(state);

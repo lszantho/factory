@@ -53,6 +53,8 @@ The lesson generalises: **when the factory misbehaves, the culprit is almost alw
 
 The discipline is to keep it *minimal* and to treat it as a hint, not an authority. Everything that *can* be re-derived from reality (is there a PR, did CI pass, was it approved, was it merged, is the task done) *is* re-derived, every tick — never cached in `state.json` and trusted.
 
+The same discipline applies to the target repo's local checkout that the orchestrator reads `dab` from. It's a *mirror* of `origin`, not a source of truth — so a tick fast-forwards it to `origin` before observing, and the orchestrator never writes to it (task completion flows through the reviewed PR instead of a post-merge local mutation). That keeps the mirror strictly a reflection of merged reality, never a private draft that can drift. See [ADR 008](adr/ADR_008_READ_ONLY_CHECKOUT_COMPLETION_IN_PR.md).
+
 ## 3. A deterministic core; intelligence only at the edges
 
 The orchestrator makes **no LLM call of its own.** It is a plain, deterministic router: read state, run a fixed decision tree, emit one action. Given the same observed reality, it always decides the same thing.
