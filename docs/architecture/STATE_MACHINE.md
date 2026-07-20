@@ -56,7 +56,7 @@ stateDiagram-v2
     Reconciled --> [*]
 ```
 
-`ReadyToMerge` is the one state that never resolves on its own — `autoMerge` is deliberately off, so a tick keeps reporting `would-merge` until a human merges. Everything else resolves itself across ticks without you doing anything but re-running the command.
+`ReadyToMerge` is the only state whose behaviour depends on config. With `autoMerge: true` (the current setting since 2026-07-20) a tick merges the approved, green PR itself (squash + delete branch) and reconciles — the loop is fully hands-off from dispatch to merge. With `autoMerge: false` it instead stops here, reporting `would-merge`, until a human merges. Everything else resolves itself across ticks without you doing anything but re-running the command.
 
 Note that a PR closed or merged **through any channel** — GitHub's web UI, `gh pr merge` run by hand, auto-merge — is caught: the tick queries GitHub for PRs in *all* states and reconciles accordingly (`MERGED` → clean up; `CLOSED` without merge → surface for a human). This is the level-triggered principle in action ([ADR 002](adr/ADR_002_RECONCILE_STATE_FROM_REALITY.md)).
 
@@ -67,9 +67,10 @@ Note that a PR closed or merged **through any channel** — GitHub's web UI, `gh
 | Nothing dispatched yet, epic has unstarted work | Dispatches a developer for the next task |
 | You just got a `dispatch` line | Nothing to check yet — running again immediately just says `wait` |
 | A background session finished (`claude agents --json` shows `idle`/`done`, or check `claude logs <id>`) | Run it — it notices the resulting PR and dispatches the reviewer once CI is green |
-| A review just landed (approved or changes-requested) | Run it — dispatches developer/architect to fix, or reports `would-merge` |
+| A review just landed (approved or changes-requested) | Run it — dispatches developer/architect to fix, or (with `autoMerge` on) merges the approved, green PR itself |
 | CI still running on an open PR | Running now just reports `wait` — nothing to do until CI finishes |
-| You see `would-merge` | **You** run `gh pr merge <PR>` yourself, then run the tick again so it reconciles state |
+| A PR is approved + green (`autoMerge: true`, current) | Run it — the tick merges it (squash + delete branch), runs `dab complete`, clears state, all in one step |
+| You see `would-merge` (only if `autoMerge` were off) | **You** run `gh pr merge <PR>` yourself, then run the tick again so it reconciles state |
 | You merged a PR yourself, outside the orchestrator | Run it — the next tick reconciles state (`reconciled-merged`) before considering anything else |
 | An epic's last task just got reconciled | Run it again — *this* tick notices zero remaining tasks and dispatches the architect to close the epic |
 

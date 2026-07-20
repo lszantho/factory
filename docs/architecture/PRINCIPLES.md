@@ -61,7 +61,7 @@ All judgment — writing code, designing an RFC, deciding whether a PR is good e
 
 ## 4. Humans gate what is expensive to reverse
 
-Autonomy is introduced deliberately, not maximally. The pipeline can run itself right up to the point of an irreversible action — merging to `main` — and then stops for a human, because `autoMerge` is off. A rolling dispatch budget caps how much work can be started in any window, so even a misfiring loop cannot run away. The manual, one-tick-at-a-time cadence used today is itself a circuit-breaker: it puts a human in the loop at every step while the pipeline is still young enough to surprise us. These gates are meant to be *relaxed* as trust is earned, not to be permanent. See [ADR 006](adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md).
+Autonomy is introduced deliberately, not maximally — and *relaxed* as trust is earned, gate by gate, rather than granted all at once. The merge to `main`, the one genuinely irreversible step, was a human gate through the first epic; once that epic completed cleanly end-to-end it was retired (`autoMerge: true`, as of 2026-07-20), and the orchestrator now closes the loop itself. Two gates still stand: a rolling dispatch budget caps how much work can be started in any window, so even a misfiring loop cannot run away; and the manual, one-tick-at-a-time cadence keeps a human in the loop at every transition while the pipeline is still young enough to surprise us. The budget is expected to stay indefinitely as a safety limiter; the manual cadence is the next gate to relax (a scheduled trigger). See [ADR 006](adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md).
 
 ## 5. The tool is generic; the behaviour is per-repo
 

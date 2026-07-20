@@ -44,4 +44,4 @@ The **agent personas** (`architect.md` / `developer.md` / `reviewer.md`) and the
 
 ## Operational status
 
-Currently run **manually**, one tick at a time, with `autoMerge: false` — the merge is a deliberate human gate. A scheduled (cron/launchd) trigger and hands-off merging are possible but intentionally deferred while the pipeline earns trust. See [ADR 006](docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md).
+Currently run **manually**, one tick at a time. As of 2026-07-20 `autoMerge: true` — after the first epic (`linter-modernization`) completed cleanly end-to-end, the human merge gate was retired: the orchestrator now merges an approved, green PR itself (squash + delete branch) and reconciles. The dispatch budget and the manual-tick cadence remain as the still-standing safety gates; a scheduled (cron/launchd) trigger is the next step still deferred. See [ADR 006](docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md).

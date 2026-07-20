@@ -16,7 +16,9 @@ Merging to `main` is also the one step in the loop that is genuinely expensive t
 
 **Introduce autonomy deliberately and relaxably, with three gates in place while the pipeline earns trust:**
 
-1. **`autoMerge: false` — a human gates the merge.** The orchestrator drives a task all the way to "approved + green CI" and then stops, reporting `would-merge` rather than merging. A human performs the merge. When the pipeline has proven itself, flipping `autoMerge: true` lets the orchestrator's own `merge` action close the loop (it already exists and does the full `gh pr merge` → `dab complete` → clear-state sequence).
+1. **`autoMerge` — a human gates the merge until the pipeline is proven.** The orchestrator drives a task all the way to "approved + green CI" and then stops, reporting `would-merge` rather than merging; a human performs the merge. When the pipeline has proven itself, flipping `autoMerge: true` lets the orchestrator's own `merge` action close the loop (it does the full `gh pr merge --squash --delete-branch` → `dab complete` → clear-state sequence).
+
+   > **Relaxed 2026-07-20.** After the first epic (`linter-modernization`) ran end-to-end through the factory — including the first real `ls-reviewer` approvals and the reconcile-from-reality behaviour — the operator judged the pipeline trustworthy and set `autoMerge: true`. The human merge gate is retired; the orchestrator now merges approved, green PRs itself. The decision and its reasoning are preserved here because they explain *why the gate existed and on what basis it was lifted* — the gate was always a milestone, and this is the milestone being reached, not the reasoning being overturned. The remaining two gates (budget, manual ticks) still stand.
 
 2. **A rolling dispatch budget.** `budget-guard.mjs` caps dispatches to `maxDispatchesPerWindow` within a rolling `windowMinutes` window (default 8 per 300 min). Even a logic error that wants to dispatch endlessly is bounded; when the cap is hit the tick reports `blocked: budget-exceeded` and resumes once the window rolls over.
 
@@ -25,6 +27,6 @@ Merging to `main` is also the one step in the loop that is genuinely expensive t
 ## Consequences
 
 - **The blast radius of a coordination bug is small.** A misfire shows up at the next manual tick, visible and interruptible, rather than compounding unattended.
-- **`ReadyToMerge` never self-resolves today.** With `autoMerge` off, a tick will keep reporting `would-merge` for an approved PR until a human merges it — this is intended, and is the one state that requires human action to advance (see the [state machine](../STATE_MACHINE.md)).
+- **`ReadyToMerge` behaviour depends on the `autoMerge` flag.** With it off (the original posture), a tick keeps reporting `would-merge` for an approved PR until a human merges — the one state that required human action to advance. With it on (since 2026-07-20), the same tick merges it and reconciles automatically (see the [state machine](../STATE_MACHINE.md)).
 - **Merging outside the orchestrator is possible but must reconcile.** Because a human does the merge, they may do it via `gh` or the GitHub UI — which is exactly why the reconcile-from-reality behaviour of [ADR 002](ADR_002_RECONCILE_STATE_FROM_REALITY.md) is a prerequisite for this gate to be safe: the next tick catches state up regardless of how the merge happened.
 - **These gates are milestones, not fixtures.** The intended path is to relax them as confidence grows — load the timer for a self-triggering loop, then enable `autoMerge` for hands-off closing — most likely one at a time, after several clean end-to-end cycles under the current manual operation. The budget cap is the one gate expected to stay indefinitely, as a permanent safety limiter.

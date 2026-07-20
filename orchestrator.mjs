@@ -446,7 +446,7 @@ function main() {
       saveState(state);
       return;
     }
-    runGh(config, ['pr', 'merge', String(decision.prNumber), '--squash', '--repo', config.repo]);
+    runGh(config, ['pr', 'merge', String(decision.prNumber), '--squash', '--delete-branch', '--repo', config.repo]);
     // Only real dab todo/epic-todo tasks get `dab complete`; RFC/backlog-graduation/epic-close
     // PRs ("board-change") already applied their dab/** change inside the dispatched session —
     // there's nothing left to mark done, `dab complete` would just fail to find a matching task.
