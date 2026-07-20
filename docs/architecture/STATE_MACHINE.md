@@ -62,6 +62,9 @@ Note that a PR closed or merged **through any channel** — GitHub's web UI, `gh
 
 ## Cheat sheet: when do I need to run it?
 
+**The short answer: run `node orchestrator.mjs <repo> --status` (read-only) and look at the headline.** It reconstructs the exact reality a tick would see and tells you whether a tick would act (`▶`), wait (`⏸`), or is blocked (`⚠`) — so you never have to guess or go check GitHub yourself. Run a real tick when it says `▶`. `--watch` refreshes it on a timer. The table below is the underlying logic that verdict is computed from.
+
+
 | What just happened | What the next tick will do |
 | --- | --- |
 | Nothing dispatched yet, epic has unstarted work | Dispatches a developer for the next task |

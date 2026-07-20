@@ -16,10 +16,17 @@ import { budgetStatus, recordDispatch, notify } from './budget-guard.mjs';
 
 const FACTORY_DIR = path.dirname(fileURLToPath(import.meta.url));
 const repoConfigName = process.argv[2];
-if (!repoConfigName) {
-  console.error('Usage: node orchestrator.mjs <repoConfigName>  (expects configs/<repoConfigName>.json to exist)');
+if (!repoConfigName || repoConfigName.startsWith('-')) {
+  console.error('Usage: node orchestrator.mjs <repoConfigName> [--status] [--watch[=seconds]]');
   process.exit(1);
 }
+const CLI_FLAGS = process.argv.slice(3);
+const WATCH_FLAG = CLI_FLAGS.find((f) => f.startsWith('--watch'));
+const WATCH_SECONDS = WATCH_FLAG ? Number(WATCH_FLAG.split('=')[1]) || 30 : null;
+// --status (and --watch, which is just a repeating --status) is a read-only monitor: it observes
+// the same reality a real tick would and reports what a tick WOULD do, without doing it or
+// touching state. This is the answer to "how do I know when to run it?" without staring at GitHub.
+const STATUS_ONLY = CLI_FLAGS.includes('--status') || WATCH_FLAG != null;
 
 const CONFIG_PATH = path.join(FACTORY_DIR, 'configs', `${repoConfigName}.json`);
 const STATE_PATH = path.join(FACTORY_DIR, 'state', `${repoConfigName}.json`);
@@ -390,6 +397,97 @@ function decide(config, state) {
   };
 }
 
+// ---- Read-only status monitor (--status / --watch) ------------------------------------------
+// A tick that acts vs. a tick that does nothing look identical until you run it. These helpers
+// let you ask "would running a tick make progress right now?" without side effects, by observing
+// reality exactly as `decide()` does and describing the answer.
+
+const ACTIONABLE_ACTIONS = new Set(['dispatch', 'merge', 'reconcile-merged']);
+
+function ciLabel(pr) {
+  const rollup = pr?.statusCheckRollup ?? [];
+  if (rollup.length === 0) return 'no-ci';
+  if (isCiGreen(pr)) return 'green';
+  const bad = rollup.some((c) => CI_BAD_CONCLUSIONS.has((c.conclusion ?? c.state ?? '').toUpperCase()));
+  return bad ? 'RED' : 'pending';
+}
+
+function describeDecision(d) {
+  switch (d.action) {
+    case 'dispatch': return `dispatch ${d.role} for "${d.taskId}" (${d.reason})`;
+    case 'merge': return `merge PR #${d.prNumber} for "${d.taskId}" — autoMerge`;
+    case 'reconcile-merged': return `reconcile "${d.taskId}" — PR #${d.prNumber} was merged outside the orchestrator`;
+    case 'wait': return `wait — ${d.reason}${d.taskId ? ` ("${d.taskId}")` : ''}`;
+    case 'blocked': return `blocked — ${d.reason}`;
+    case 'idle': return 'idle — no tracked work, and nothing queued on the board';
+    default: return d.action;
+  }
+}
+
+function renderStatus(config) {
+  const state = loadState();
+  const out = [];
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 16);
+  out.push(`Factory status — ${repoConfigName}    ${now}`);
+
+  const authOk = ghAuthOk(config);
+  const budget = budgetStatus(state, config);
+  out.push(`gh auth: ${authOk ? 'ok' : 'NOT AUTHENTICATED'}    budget: ${budget.count}/${budget.cap} in ${config.budget?.windowMinutes ?? 300}m    autoMerge: ${config.autoMerge ? 'on' : 'off'}`);
+  out.push('');
+
+  const taskIds = Object.keys(state.tasks).sort();
+  out.push(`Tracked tasks (${taskIds.length}):`);
+  if (taskIds.length === 0) {
+    out.push('  (none in flight)');
+  }
+  for (const taskId of taskIds) {
+    const task = state.tasks[taskId];
+    if (!task.branch) { out.push(`  ${taskId} — no branch yet`); continue; }
+    const sessionName = `factory-${task.lastRole ?? 'developer'}-${taskId}`;
+    const running = hasRunningSession(config, sessionName);
+    const pr = findPrForBranch(config, task.branch);
+    const prStr = pr ? `PR #${pr.number} ${pr.state}  CI:${ciLabel(pr)}  review:${pr.reviewDecision || '—'}` : 'no PR yet';
+    out.push(`  ${taskId}`);
+    out.push(`      role=${task.lastRole ?? '?'}  session=${running ? 'running' : 'idle/done'}  ${prStr}`);
+  }
+  out.push('');
+
+  // Mirror main()'s guard order exactly, on a clone so decide()'s bookkeeping never persists.
+  let decision;
+  if (!authOk) decision = { action: 'blocked', reason: 'gh-not-authenticated' };
+  else if (!budget.allowed) decision = { action: 'blocked', reason: 'budget-exceeded' };
+  else {
+    try { decision = decide(config, structuredClone(state)); }
+    catch (err) { decision = { action: 'blocked', reason: `decide-threw: ${err?.message ?? err}` }; }
+  }
+
+  const marker = ACTIONABLE_ACTIONS.has(decision.action) ? '▶ ACT — a tick will make progress'
+    : decision.action === 'blocked' ? '⚠ BLOCKED — needs you'
+    : '⏸ WAIT — nothing to do yet';
+  out.push(`Next tick would: ${marker}`);
+  out.push(`  ${describeDecision(decision)}`);
+  if (ACTIONABLE_ACTIONS.has(decision.action)) {
+    out.push('');
+    out.push(`  → run:  node orchestrator.mjs ${repoConfigName}`);
+  }
+  return out.join('\n');
+}
+
+function statusMain() {
+  const config = loadConfig();
+  if (WATCH_SECONDS) {
+    const tick = () => {
+      process.stdout.write('\x1Bc'); // clear screen
+      console.log(renderStatus(config));
+      console.log(`\n(watching — refreshing every ${WATCH_SECONDS}s · Ctrl-C to stop)`);
+      setTimeout(tick, WATCH_SECONDS * 1000);
+    };
+    tick();
+  } else {
+    console.log(renderStatus(config));
+  }
+}
+
 function main() {
   const config = loadConfig();
   const state = loadState();
@@ -506,4 +604,5 @@ function main() {
   saveState(state);
 }
 
-main();
+if (STATUS_ONLY) statusMain();
+else main();

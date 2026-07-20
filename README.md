@@ -15,13 +15,17 @@ The orchestrator itself makes **no LLM call**. It's a plain deterministic router
 ## Quick start
 
 ```bash
-# One tick against a configured target repo:
+# One tick against a configured target repo (may act — dispatch/merge/reconcile):
 node orchestrator.mjs leanmacrofeed
+
+# Read-only: observe reality and report what a tick WOULD do, without doing it:
+node orchestrator.mjs leanmacrofeed --status
+node orchestrator.mjs leanmacrofeed --watch      # auto-refreshing status, every 30s
 ```
 
-Each invocation prints a single JSON decision line (also appended to `logs/<repo>.jsonl`) describing what it did: `dispatch`, `wait`, `would-merge`, `reconciled-merged`, `blocked`, or `idle`.
+A **tick** (no flag) prints a single JSON decision line (also appended to `logs/<repo>.jsonl`): `dispatch`, `wait`, `would-merge`, `merged`, `reconciled-merged`, `blocked`, or `idle`.
 
-You run it again whenever something external changed (an agent session finished, CI finished, a review landed, you merged a PR) and you want the orchestrator to react. Running it back-to-back with nothing changed is harmless — it just reports `wait` or `idle`. The [state-machine doc](docs/architecture/STATE_MACHINE.md) has a "when do I need to run it?" cheat sheet.
+`--status` is the answer to *"do I need to run it right now?"* It observes the same reality a tick would — every tracked task's session/PR/CI/review state — and tells you plainly whether a tick would **act** (`▶`), **wait** (`⏸`), or is **blocked** (`⚠`), without touching anything. Run a tick whenever `--status` shows `▶`. The [state-machine doc](docs/architecture/STATE_MACHINE.md) has a fuller "when do I run it?" cheat sheet.
 
 ## Layout
 
