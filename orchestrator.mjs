@@ -367,6 +367,16 @@ function decide(config, state) {
   // `dab status`'s activeTasks reliably maps spec path -> real frontmatter id, so fall back to it.
   const specToId = new Map(statusPayload.activeTasks.map((t) => [t.spec, t.id]));
 
+  // Autopilot checkpoint: if `stopAfterTask` is configured and that task is no longer active on the
+  // board (i.e. it's been completed/merged), the requested subset is done — pause instead of
+  // starting anything new. The in-flight loop above still finishes whatever's running, and the
+  // checkpoint task itself completes normally (it stays "active" until merged, so we only stop once
+  // it's done). Set to null/absent to run the whole board. NB: a `stopAfterTask` that doesn't match
+  // a real task id is never "active", so it would pause immediately — validate the id when setting it.
+  if (config.stopAfterTask && !statusPayload.activeTasks.some((t) => t.id === config.stopAfterTask)) {
+    return { action: 'idle', reason: 'autopilot-checkpoint-reached', detail: `completed through "${config.stopAfterTask}"` };
+  }
+
   // WIP cap: only START new work while under the concurrent-in-flight limit. "In flight" = tracked
   // in state.json with a branch (its worktree/PR lifecycle is underway). Default 1 = single-track,
   // i.e. today's behaviour. The in-flight loop above always runs first, so already-started work
@@ -468,7 +478,9 @@ function describeDecision(d) {
     case 'reconcile-merged': return `reconcile "${d.taskId}" — PR #${d.prNumber} was merged outside the orchestrator`;
     case 'wait': return `wait — ${d.reason}${d.taskId ? ` ("${d.taskId}")` : ''}`;
     case 'blocked': return `blocked — ${d.reason}`;
-    case 'idle': return 'idle — no tracked work, and nothing queued on the board';
+    case 'idle': return d.reason === 'autopilot-checkpoint-reached'
+      ? `idle — autopilot checkpoint reached (${d.detail})`
+      : 'idle — no tracked work, and nothing queued on the board';
     default: return d.action;
   }
 }
@@ -591,7 +603,7 @@ function main() {
   }
 
   if (decision.action === 'idle') {
-    logDecision({ decisionId, type: 'idle' });
+    logDecision({ decisionId, type: 'idle', reason: decision.reason, detail: decision.detail });
     saveState(state);
     return;
   }

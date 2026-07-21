@@ -2,8 +2,9 @@
   "repoDir": "/Users/lucian/Works/LeanMacroFeed",
   "repo": "lszantho/lean-macro-feed",
   "dryRun": false,
-  "autoMerge": false,
+  "autoMerge": true,
   "maxConcurrentTasks": 1,
+  "stopAfterTask": "migrate_event_ledger_to_registry_event_title_resolution",
   "budget": {
     "maxDispatchesPerWindow": 8,
     "windowMinutes": 300
