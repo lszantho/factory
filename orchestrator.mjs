@@ -356,11 +356,17 @@ function inFlightAction(config, taskId, task, titleHint) {
       // SHA-suffixed so a just-finished session of the previous round (whose transcript is still
       // <staleMinutes old) can't false-positive hasRunningSession and skip this dispatch.
       sessionName: `factory-${toArchitect ? 'architect-mediate' : 'developer'}-${taskId}-${shortHead}`,
-      fromPr: pr.number,
+      // --worktree, NOT --from-pr. `--from-pr` resumes a session associated with the PR, but once
+      // several sessions touch a PR (original dev + reviewer + prior feedback rounds) it can't pick
+      // one and falls back to an interactive picker that hangs forever in --bg (no TTY) — observed
+      // live: five back-to-back address-feedback dispatches all stuck "blocked" with no transcript,
+      // never pushing, so the head never advanced and the re-review never fired. Dispatching into
+      // the task's existing worktree is deterministic; the fixer reads the feedback via `gh pr view`.
+      worktree: task.worktreeName,
       reason: toArchitect ? 'mediate-rejection' : 'address-feedback',
       prompt: toArchitect
-        ? `PR #${pr.number} for task "${titleHint ?? taskId}" has been rejected ${rounds} time(s) by the reviewer, tagged "${tag}". Read the PR discussion and mediate per your role instructions: fix the spec, split the task, or clarify the approach.`
-        : `Address the reviewer's feedback on PR #${pr.number} for task "${titleHint ?? taskId}". Push your changes to the same branch.`,
+        ? `PR #${pr.number} for task "${titleHint ?? taskId}" has been rejected ${rounds} time(s) by the reviewer, tagged "${tag}". Read the discussion with \`gh pr view ${pr.number}\` / \`gh pr diff ${pr.number}\` and mediate per your role instructions: fix the spec, split the task, or clarify the approach.`
+        : `Address the reviewer's feedback on PR #${pr.number} for task "${titleHint ?? taskId}". Read it with \`gh pr view ${pr.number} --comments\`, make the changes in this worktree, and push to the same branch (do NOT open a new PR).`,
       onDispatched: () => { task.rejectionCount = rounds; task.lastRejectionSha = head; }
     };
   }
