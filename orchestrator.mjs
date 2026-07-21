@@ -6,17 +6,25 @@
 // logs/<repoConfigName>.jsonl. See the target repo's .agents/AGENTS.md §6
 // (Autonomous Factory Mode) for the rules dispatched sessions operate under.
 
-import * as fs from 'node:fs';
+// Default import, not `* as fs`: the ESM namespace form gives frozen bindings that
+// t.mock.method() can't redefine, which blocks test/orchestrator.test.mjs from mocking
+// fs.statSync for sessionActivelyWriting/canFastSkip. The default export is the same
+// underlying mutable object, so this changes nothing at runtime.
+import fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { budgetStatus, recordDispatch, notify } from './budget-guard.mjs';
 
 const FACTORY_DIR = path.dirname(fileURLToPath(import.meta.url));
+// True only when this file is the process entry point (`node orchestrator.mjs ...`), not when
+// it's `import`ed (e.g. by test/orchestrator.test.mjs to exercise the exported pure functions).
+// Keeps a test import side-effect-free: no CLI-arg validation, no process.exit, no tick/dispatch.
+const IS_MAIN = process.argv[1] != null && import.meta.url === pathToFileURL(process.argv[1]).href;
 const repoConfigName = process.argv[2];
-if (!repoConfigName || repoConfigName.startsWith('-')) {
+if (IS_MAIN && (!repoConfigName || repoConfigName.startsWith('-'))) {
   console.error('Usage: node orchestrator.mjs <repoConfigName> [--status] [--watch[=seconds]]');
   process.exit(1);
 }
@@ -65,28 +73,30 @@ function logDecision(entry) {
 // given outcome is seen, and folds repeats into a count flushed (as a single 'coalesced' line) the
 // moment the outcome actually changes. Returns true iff this call produced a *new* line — callers
 // use that to also gate a notify() so notifications don't repeat every tick either.
-function quietSig(entry) {
+export function quietSig(entry) {
   return [entry.type, entry.reason ?? '', entry.taskId ?? '', entry.prNumber ?? '', entry.message ?? ''].join('|');
 }
 
-function flushQuiet(state) {
+// `log` is injectable (defaults to the real logDecision) so tests can assert on what would have
+// been written without touching logs/<repo>.jsonl.
+export function flushQuiet(state, log = logDecision) {
   if (state.lastQuietSig && state.quietRepeatCount > 0) {
-    logDecision({ type: 'coalesced', of: state.lastQuietSig, repeats: state.quietRepeatCount });
+    log({ type: 'coalesced', of: state.lastQuietSig, repeats: state.quietRepeatCount });
   }
   state.lastQuietSig = null;
   state.quietRepeatCount = 0;
 }
 
-function logQuiet(state, entry) {
+export function logQuiet(state, entry, log = logDecision) {
   const sig = quietSig(entry);
   if (state.lastQuietSig === sig) {
     state.quietRepeatCount = (state.quietRepeatCount ?? 0) + 1;
     return false;
   }
-  flushQuiet(state);
+  flushQuiet(state, log);
   state.lastQuietSig = sig;
   state.quietRepeatCount = 0;
-  logDecision(entry);
+  log(entry);
   return true;
 }
 
@@ -199,7 +209,7 @@ function hasRunningSession(config, sessionName) {
 // it here would delay noticing a just-opened PR by up to 30 minutes — a latency regression worse
 // than the tick interval it replaces. This checks the transcript mtime directly (no `claude
 // agents --json` subprocess), so a mid-flight skip costs nothing at all.
-function sessionActivelyWriting(task, activeSeconds) {
+export function sessionActivelyWriting(task, activeSeconds) {
   if (!task.sessionCwd || !task.sessionId) return false;
   try {
     const { mtimeMs } = fs.statSync(sessionTranscriptPath(task.sessionCwd, task.sessionId));
@@ -214,7 +224,7 @@ function sessionActivelyWriting(task, activeSeconds) {
 // to start either (below the cap, decide() must still run so a new task can be dispatched). Once
 // any in-flight task has a PR, CI/review state is GitHub-side with no local proxy for it — this can
 // never fast-skip that task, only the pre-PR window.
-function canFastSkip(config, state) {
+export function canFastSkip(config, state) {
   const inFlight = Object.keys(state.tasks).filter((id) => state.tasks[id].branch);
   const wipLimit = config.maxConcurrentTasks ?? 1;
   if (inFlight.length === 0 || inFlight.length < wipLimit) return false;
@@ -891,5 +901,7 @@ function main() {
   }
 }
 
-if (STATUS_ONLY) statusMain();
-else main();
+if (IS_MAIN) {
+  if (STATUS_ONLY) statusMain();
+  else main();
+}

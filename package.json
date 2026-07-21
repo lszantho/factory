@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "tick": "node orchestrator.mjs",
-    "serve": "node server.mjs"
+    "serve": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
   }
 }
