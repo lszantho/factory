@@ -15,7 +15,7 @@ Enhance the orchestrator to catch dispatch failures or specific exit codes (like
 ### Phase 3: Task-Complexity Routing
 Introduce role-based model routing. For example:
 - **Architect**: Tasks requiring deep reasoning and system design can be routed to `gemini-3.1-pro` or Claude 3.5 Sonnet.
-- **Developer/Reviewer**: Implementation and review tasks can be routed to faster, more token-efficient models like `gemini-3.5-flash`.
+- **Developer/Reviewer**: Implementation and review tasks can be routed to faster, more token-efficient models like `gemini-3.6-flash`.
 
 ## Scope of Changes
 The current tight coupling in `orchestrator.mjs` is limited to three specific call sites:
