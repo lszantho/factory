@@ -6,3 +6,4 @@ Design proposals for factory changes that are big enough to think through before
 | --- | --- | --- |
 | [001](RFC_001_PARALLEL_TASK_EXECUTION.md) | Parallel task execution | Proposed — keystone landed, rest future work |
 | [002](RFC_002_FACTORY_CONTROL_UI.md) | Factory control UI | Proposed — local dashboard to observe/drive the factory |
+| [003](RFC_003_EVENT_DRIVEN_TICKS.md) | Tick cadence — is faster polling good enough? | Proposed — study; cost analysis of frequent polling (rate limits, log noise, fail-fast) vs. event-driven triggers |
