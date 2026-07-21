@@ -5,6 +5,7 @@
   "description": "Autonomous multi-agent development orchestrator (architect/developer/reviewer), config-driven per target repo.",
   "type": "module",
   "scripts": {
-    "tick": "node orchestrator.mjs"
+    "tick": "node orchestrator.mjs",
+    "serve": "node server.mjs"
   }
 }

@@ -1,4 +1,4 @@
 node_modules/
 state/*.json
-logs/*.jsonl
+logs/
 .DS_Store

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Factory</title>
+  <meta name="description" content="Local control dashboard for the autonomous multi-agent factory orchestrator." />
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚙️</text></svg>" />
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Header ──────────────────────────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-inner">
+      <a class="header-logo" href="/">
+        <span class="header-logo-icon">⚙</span>
+        Factory
+      </a>
+      <select id="repo-select" class="repo-select" title="Select target repo"></select>
+      <div class="header-spacer"></div>
+      <div id="autopilot-badge" class="autopilot-badge hidden" title="Orchestrator is running on a launchd schedule">
+        <span class="autopilot-badge-dot"></span>
+        Autopilot
+      </div>
+      <div class="header-status-badge">
+        <div id="poll-dot" class="poll-dot" title="Polling status"></div>
+        <span id="poll-label">connecting…</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Main content ────────────────────────────────────────────────────── -->
+  <main class="content">
+
+    <!-- Disconnected banner -->
+    <div id="disconnected-banner" class="disconnected-banner" role="alert">
+      ⚠ Cannot reach the factory server. Make sure <code>node server.mjs</code> is running.
+    </div>
+
+    <!-- Verdict banner -->
+    <div id="verdict-region" aria-live="polite" aria-label="Next tick verdict">
+      <div class="skeleton skeleton-verdict"></div>
+    </div>
+
+    <!-- Tick output panel -->
+    <div id="tick-panel" class="tick-panel" role="log" aria-label="Tick output">
+      <div class="tick-panel-header">▶ Tick output</div>
+      <div id="tick-output" class="tick-panel-output"></div>
+    </div>
+
+    <!-- Gauges -->
+    <div id="gauges-region" aria-label="System gauges">
+      <div class="gauges">
+        <div class="skeleton skeleton-gauge"></div>
+        <div class="skeleton skeleton-gauge"></div>
+        <div class="skeleton skeleton-gauge"></div>
+        <div class="skeleton skeleton-gauge"></div>
+        <div class="skeleton skeleton-gauge"></div>
+      </div>
+    </div>
+
+    <!-- Tasks -->
+    <div>
+      <div class="section-header">
+        <span class="section-title">In-flight tasks</span>
+        <span id="tasks-count" class="section-count">—</span>
+      </div>
+      <div id="tasks-region" aria-label="In-flight tasks">
+        <div class="skeleton skeleton-task"></div>
+      </div>
+    </div>
+
+    <!-- Timeline -->
+    <div>
+      <div class="section-header">
+        <span class="section-title">Decision log</span>
+      </div>
+      <div id="timeline-region" class="timeline" aria-label="Decision timeline">
+        <div class="skeleton skeleton-timeline"></div>
+      </div>
+      <div class="timeline-load-more">
+        <button id="btn-load-more" class="btn-load-more">Load more</button>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

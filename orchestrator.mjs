@@ -27,6 +27,9 @@ const WATCH_SECONDS = WATCH_FLAG ? Number(WATCH_FLAG.split('=')[1]) || 30 : null
 // the same reality a real tick would and reports what a tick WOULD do, without doing it or
 // touching state. This is the answer to "how do I know when to run it?" without staring at GitHub.
 const STATUS_ONLY = CLI_FLAGS.includes('--status') || WATCH_FLAG != null;
+// --json (only meaningful alongside --status) emits structured JSON instead of human text.
+// Used by the local UI server; ignored during --watch (interactive terminal only).
+const JSON_FLAG = CLI_FLAGS.includes('--json');
 
 const CONFIG_PATH = path.join(FACTORY_DIR, 'configs', `${repoConfigName}.json`);
 const STATE_PATH = path.join(FACTORY_DIR, 'state', `${repoConfigName}.json`);
@@ -90,7 +93,14 @@ function ghAuthOk(config) {
 // `--ff-only` always succeeds.
 function syncTargetRepo(config) {
   try {
-    execFileSync('git', ['-C', config.repoDir, 'pull', '--ff-only'], { encoding: 'utf-8', timeout: 60_000 });
+    // Fetch, then fast-forward to exactly the current branch's upstream (origin/main) — NOT
+    // `git pull --ff-only`, which merges whatever FETCH_HEAD lists as "for-merge". Under concurrent
+    // git activity during an autopilot run that FETCH_HEAD was seen with multiple for-merge heads
+    // (and origin/main momentarily missing), making `pull --ff-only` fail with "Cannot fast-forward
+    // to multiple branches". Merging `@{u}` explicitly targets one ref, so it's immune to that:
+    // the fetch rebuilds origin/main if it was corrupted, and the merge can only ever ff to it.
+    execFileSync('git', ['-C', config.repoDir, 'fetch', '--quiet', 'origin'], { encoding: 'utf-8', timeout: 60_000 });
+    execFileSync('git', ['-C', config.repoDir, 'merge', '--ff-only', '--quiet', '@{u}'], { encoding: 'utf-8', timeout: 60_000 });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: String(err?.stderr || err?.message || err).trim().split('\n').slice(-3).join(' ') };
@@ -159,7 +169,7 @@ function findPrForBranch(config, branch) {
   // check would misreport every legitimately-merged PR as unmerged.
   const raw = runGh(config, [
     'pr', 'list', '--repo', config.repo, '--head', branch, '--state', 'all',
-    '--json', 'number,state,reviewDecision,statusCheckRollup,mergeable,mergedAt'
+    '--json', 'number,state,reviewDecision,statusCheckRollup,mergeable,mergedAt,headRefOid'
   ]);
   const prs = JSON.parse(raw || '[]');
   // A branch name can be reused across retries, so more than one PR may share it — the most
@@ -297,32 +307,53 @@ function inFlightAction(config, taskId, task, titleHint) {
 
   task.prNumber = pr.number;
 
+  // The review loop keys off the reviewed commit SHA (`headRefOid`). This is what lets the
+  // orchestrator tell "a fix was pushed, re-review it" apart from "rejected again," and count
+  // rejections per review-round rather than per tick. `task.reviewedSha` = the commit the reviewer
+  // last looked at; `task.lastRejectionSha` = the commit we last counted a rejection for.
+  const head = pr.headRefOid;
+  const shortHead = head ? head.slice(0, 7) : 'nohead';
+
   if (pr.reviewDecision === 'APPROVED' && isCiGreen(pr)) {
     return { action: 'merge', taskId, prNumber: pr.number };
   }
 
   if (pr.reviewDecision === 'CHANGES_REQUESTED') {
-    task.rejectionCount = (task.rejectionCount ?? 0) + 1;
-    const tag = latestRejectionTag(config, pr.number);
-    if (task.rejectionCount >= 2 || tag === 'architectural') {
+    // Head advanced past what the reviewer saw → a fix was pushed since the rejection. Get a fresh
+    // review; don't count a new rejection. (Without this the PR would sit at CHANGES_REQUESTED
+    // forever — GitHub doesn't clear it on push without branch protection — and never re-review.)
+    if (head !== task.reviewedSha) {
       return {
         action: 'dispatch',
-        role: 'architect',
+        role: 'reviewer',
         taskId,
-        sessionName: `factory-architect-mediate-${taskId}`,
-        fromPr: pr.number,
-        reason: 'mediate-rejection',
-        prompt: `PR #${pr.number} for task "${titleHint ?? taskId}" has been rejected ${task.rejectionCount} time(s) by the reviewer, tagged "${tag}". Read the PR discussion and mediate per your role instructions: fix the spec, split the task, or clarify the approach.`
+        sessionName: `factory-reviewer-${taskId}-${shortHead}`,
+        reason: 're-review',
+        prompt: `PR #${pr.number} for task "${titleHint ?? taskId}" was updated after a changes-requested review. Re-review the current state per your role instructions via \`gh pr diff ${pr.number}\` / \`gh pr view ${pr.number}\`.`,
+        onDispatched: () => { task.reviewedSha = head; }
       };
     }
+    // The rejected commit is still the head — it needs a fix. Count this as a rejection round only
+    // if we haven't already counted (and dispatched a fixer for) this exact SHA, so repeated ticks
+    // while the fixer works don't inflate the count and prematurely escalate. Escalate to the
+    // architect after 2 genuine rounds or on an [architectural] tag; otherwise the developer.
+    const alreadyCounted = task.lastRejectionSha === head;
+    const rounds = (task.rejectionCount ?? 0) + (alreadyCounted ? 0 : 1);
+    const tag = latestRejectionTag(config, pr.number);
+    const toArchitect = rounds >= 2 || tag === 'architectural';
     return {
       action: 'dispatch',
-      role: 'developer',
+      role: toArchitect ? 'architect' : 'developer',
       taskId,
-      sessionName: `factory-developer-${taskId}`,
+      // SHA-suffixed so a just-finished session of the previous round (whose transcript is still
+      // <staleMinutes old) can't false-positive hasRunningSession and skip this dispatch.
+      sessionName: `factory-${toArchitect ? 'architect-mediate' : 'developer'}-${taskId}-${shortHead}`,
       fromPr: pr.number,
-      reason: 'address-feedback',
-      prompt: `Address the reviewer's feedback on PR #${pr.number} for task "${titleHint ?? taskId}". Push your changes to the same branch.`
+      reason: toArchitect ? 'mediate-rejection' : 'address-feedback',
+      prompt: toArchitect
+        ? `PR #${pr.number} for task "${titleHint ?? taskId}" has been rejected ${rounds} time(s) by the reviewer, tagged "${tag}". Read the PR discussion and mediate per your role instructions: fix the spec, split the task, or clarify the approach.`
+        : `Address the reviewer's feedback on PR #${pr.number} for task "${titleHint ?? taskId}". Push your changes to the same branch.`,
+      onDispatched: () => { task.rejectionCount = rounds; task.lastRejectionSha = head; }
     };
   }
 
@@ -331,14 +362,15 @@ function inFlightAction(config, taskId, task, titleHint) {
       action: 'dispatch',
       role: 'reviewer',
       taskId,
-      sessionName: `factory-reviewer-${taskId}`,
+      sessionName: `factory-reviewer-${taskId}-${shortHead}`,
       // No --from-pr here: it resumes a session already associated with the PR, but the
       // reviewer's first look at any given PR has no such session to resume — it was observed
       // falling back to an interactive picker (per --help: "...or open interactive picker"),
       // which hangs forever with no TTY attached in --bg mode. A plain dispatch in the main
       // checkout reviewing via `gh pr diff`/`gh pr view` (per reviewer.md) avoids that entirely.
       reason: 'ready-for-review',
-      prompt: `Review PR #${pr.number} for task "${titleHint ?? taskId}" per your role instructions. Use \`gh pr diff ${pr.number}\` and \`gh pr view ${pr.number}\` to inspect it remotely — no local checkout needed.`
+      prompt: `Review PR #${pr.number} for task "${titleHint ?? taskId}" per your role instructions. Use \`gh pr diff ${pr.number}\` and \`gh pr view ${pr.number}\` to inspect it remotely — no local checkout needed.`,
+      onDispatched: () => { task.reviewedSha = head; }
     };
   }
 
@@ -539,6 +571,78 @@ function renderStatus(config) {
   return out.join('\n');
 }
 
+/**
+ * Structured-JSON equivalent of renderStatus() — same observations, machine-readable output.
+ * Consumed by the local UI server via `node orchestrator.mjs <repo> --status --json`.
+ * The decision logic lives only in decide(); this function is a thin reader, never a second brain.
+ */
+function renderStatusJson(config) {
+  const state = loadState();
+  const authOk = ghAuthOk(config);
+  const sync = authOk ? syncTargetRepo(config) : { ok: false, error: 'gh not authenticated' };
+  const budget = budgetStatus(state, config);
+
+  const tasks = {};
+  for (const taskId of Object.keys(state.tasks).sort()) {
+    const task = state.tasks[taskId];
+    const sessionName = `factory-${task.lastRole ?? 'developer'}-${taskId}`;
+    const running = task.branch ? hasRunningSession(config, sessionName) : false;
+    const pr = task.branch ? findPrForBranch(config, task.branch) : null;
+    tasks[taskId] = {
+      branch: task.branch ?? null,
+      lastRole: task.lastRole ?? null,
+      kind: task.kind ?? null,
+      sessionRunning: running,
+      sessionId: task.sessionId ?? null,
+      lastDispatchedAt: task.lastDispatchedAt ? new Date(task.lastDispatchedAt).toISOString() : null,
+      pr: pr ? {
+        number: pr.number,
+        state: pr.state,
+        ci: ciLabel(pr),
+        reviewDecision: pr.reviewDecision ?? null,
+        mergedAt: pr.mergedAt ?? null,
+      } : null,
+    };
+  }
+
+  let decision;
+  if (!authOk) decision = { action: 'blocked', reason: 'gh-not-authenticated' };
+  else if (!sync.ok) decision = { action: 'blocked', reason: `repo-sync-failed: ${sync.error}` };
+  else if (!budget.allowed) decision = { action: 'blocked', reason: 'budget-exceeded' };
+  else {
+    try { decision = decide(config, structuredClone(state)); }
+    catch (err) { decision = { action: 'blocked', reason: `decide-threw: ${err?.message ?? err}` }; }
+  }
+
+  return {
+    repo: repoConfigName,
+    timestamp: new Date().toISOString(),
+    ghAuth: authOk,
+    repoSync: { ok: sync.ok, error: sync.ok ? undefined : sync.error },
+    repoHead: repoHead(config),
+    config: {
+      autoMerge: config.autoMerge ?? false,
+      maxConcurrentTasks: config.maxConcurrentTasks ?? 1,
+      stopAfterTask: config.stopAfterTask ?? null,
+      budget: config.budget ?? null,
+    },
+    budget: { count: budget.count, cap: budget.cap, allowed: budget.allowed },
+    tasks,
+    nextTick: {
+      action: decision.action,
+      reason: decision.reason ?? null,
+      taskId: decision.taskId ?? null,
+      prNumber: decision.prNumber ?? null,
+      role: decision.role ?? null,
+      actionable: ACTIONABLE_ACTIONS.has(decision.action),
+      marker: ACTIONABLE_ACTIONS.has(decision.action) ? 'act'
+        : decision.action === 'blocked' ? 'blocked'
+        : 'wait',
+      description: describeDecision(decision),
+    },
+  };
+}
+
 function statusMain() {
   const config = loadConfig();
   if (WATCH_SECONDS) {
@@ -549,6 +653,9 @@ function statusMain() {
       setTimeout(tick, WATCH_SECONDS * 1000);
     };
     tick();
+  } else if (JSON_FLAG) {
+    // Machine-readable output for the local UI server.
+    console.log(JSON.stringify(renderStatusJson(config)));
   } else {
     console.log(renderStatus(config));
   }
