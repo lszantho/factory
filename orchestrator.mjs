@@ -220,10 +220,18 @@ function dispatch(config, state, { role, sessionName, prompt, worktree, fromPr }
   // `claude agents --json`, matched by the --name we gave it.
   // permission-mode must be bypassPermissions, not acceptEdits, for real unattended operation:
   // acceptEdits still prompts for Bash commands (git/dab/gh/pnpm), which a --bg session can
-  // never answer, leaving it permanently "blocked". The target repo's AGENTS.md §6 restrictions
-  // on destructive ops (via --disallowedTools below) are the actual safety net, not an
-  // interactive approval step.
+  // never answer, leaving it permanently "blocked".
   const args = ['--agent', role, '--permission-mode', 'bypassPermissions', '--bg', '-n', sessionName];
+  // Since prompts are off, the only tool-level guardrail is this denylist plus the target repo's
+  // AGENTS.md §6 instructions. `--disallowedTools` blocks the operations no role should ever run
+  // (merging, force-pushing, branch deletion, hard reset) as an enforced backstop to the personas'
+  // "never merge / never force-push / never touch main" rules. Config-driven so it's tunable and
+  // visible. NB: explicit denies are intended to take precedence over the permission mode; if a
+  // session is ever observed running a denied command under bypassPermissions, promote this to a
+  // PreToolUse hook (unconditionally enforced) — see docs/architecture/EXECUTION_AND_PERMISSIONS.md.
+  if (config.disallowedTools?.length) {
+    args.push('--disallowedTools', config.disallowedTools.join(','));
+  }
   if (fromPr) {
     args.push('--from-pr', String(fromPr));
   } else if (worktree) {

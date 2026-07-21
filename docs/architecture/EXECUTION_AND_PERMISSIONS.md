@@ -46,7 +46,18 @@ claude --agent <role> --permission-mode bypassPermissions --bg -n <sessionName> 
 
 `bypassPermissions` means **the agent runs every tool without prompting** — file edits, and crucially **arbitrary `Bash`** (git/gh/pnpm/rm/curl/…). There is no interactive gate; a `--bg` session couldn't answer one anyway.
 
-**⚠️ Known gap (as of 2026-07-21):** [ADR 007](adr/ADR_007_BYPASS_PERMISSIONS_FOR_DISPATCH.md) and the code's own comment say the safety net is "the target repo's `AGENTS.md` §6 **plus `--disallowedTools`**." **`--disallowedTools` is not actually passed** — the args array has no such flag. So today the *only* thing constraining a dispatched agent is **`AGENTS.md` §6 instructions** (prose the agent is told to follow), with **no tool-level enforcement**. A well-behaved agent respects it; a confused or prompt-injected one is technically unconstrained (bounded only by the mitigations in §5). This should be fixed: either add the intended `--disallowedTools` denylist (e.g. destructive `Bash`/`rm`/force-push patterns), or correct the ADR/comment to state that §6 instructions are the only current net. It is flagged here rather than silently carried.
+**Tool denylist (`--disallowedTools`) — fixed 2026-07-21.** The orchestrator now passes a config-driven `--disallowedTools` (`configs/<repo>.json` → `disallowedTools`) that blocks the operations **no role should ever run**, as an enforced backstop to the personas' "never merge / never force-push / never touch `main`" instructions:
+
+```
+Bash(gh pr merge*)   Bash(git push --force*)   Bash(git push -f*)
+Bash(git push --force-with-lease*)   Bash(git reset --hard*)   Bash(git branch -D*)
+```
+
+Two honest limits on how strong this is:
+- **Prefix globs, not airtight.** Patterns like `Bash(gh pr merge*)` match a command *prefix*; a differently-phrased invocation could evade one. It's defense-in-depth, not a sandbox. Tune the list per repo.
+- **Precedence under `bypassPermissions` is assumed, not confirmed here.** Explicit denies are *designed* to win over the permission mode, but that hasn't been empirically verified in this setup. **If you need airtight enforcement** (e.g. before trusting wider/unattended autopilot), promote this to a **PreToolUse hook** in the target repo's `.claude/settings.json` — a hook blocks the tool call unconditionally, regardless of permission mode.
+
+(Before this fix, `--disallowedTools` was documented as the safety net but never actually passed — so the only constraint was `AGENTS.md` §6 prose, with no tool-level enforcement at all.)
 
 ---
 

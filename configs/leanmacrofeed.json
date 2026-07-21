@@ -5,6 +5,14 @@
   "autoMerge": true,
   "maxConcurrentTasks": 1,
   "stopAfterTask": "migrate_event_ledger_to_registry_event_title_resolution",
+  "disallowedTools": [
+    "Bash(gh pr merge*)",
+    "Bash(git push --force*)",
+    "Bash(git push -f*)",
+    "Bash(git push --force-with-lease*)",
+    "Bash(git reset --hard*)",
+    "Bash(git branch -D*)"
+  ],
   "budget": {
     "maxDispatchesPerWindow": 8,
     "windowMinutes": 300

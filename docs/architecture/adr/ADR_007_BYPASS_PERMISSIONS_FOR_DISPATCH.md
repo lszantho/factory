@@ -4,6 +4,8 @@
 
 Approved
 
+> **Update 2026-07-21.** The `--disallowedTools` denylist this ADR describes as half the safety net was, for a period, documented but **not actually passed** by `dispatch()`. It is now implemented (config-driven, `configs/<repo>.json` → `disallowedTools`), but note the honest limits — prefix-glob patterns, and deny-vs-`bypassPermissions` precedence assumed rather than confirmed. See [../EXECUTION_AND_PERMISSIONS.md](../EXECUTION_AND_PERMISSIONS.md) §3 for the current state and the PreToolUse-hook upgrade path if airtight enforcement is needed.
+
 ## Context
 
 A factory-dispatched agent is a `claude --bg` session with no terminal attached: nobody is there to answer an interactive permission prompt. For the session to do real work — run `git`, `dab`, `gh`, `pnpm`, edit files — it must be able to proceed without prompting.
