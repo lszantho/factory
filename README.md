@@ -44,6 +44,7 @@ The **agent personas** (`architect.md` / `developer.md` / `reviewer.md`) and the
 
 - **[docs/architecture/PRINCIPLES.md](docs/architecture/PRINCIPLES.md)** — the design philosophy. Why the "process" is deliberately implicit, and why deriving state from reality (rather than storing it) is what makes the system resilient. Start here.
 - **[docs/architecture/STATE_MACHINE.md](docs/architecture/STATE_MACHINE.md)** — the tick priority order and the per-task lifecycle, as diagrams, plus a "when do I run it?" cheat sheet.
+- **[docs/architecture/EXECUTION_AND_PERMISSIONS.md](docs/architecture/EXECUTION_AND_PERMISSIONS.md)** — who can trigger a run and why (incl. why the assistant can't), the permission stack to dispatch agents, what those agents run as + the current safety-net gap, the autopilot checklist, and why the UI button failed.
 - **[docs/architecture/adr/](docs/architecture/adr/README.md)** — Architecture Decision Records: the specific, load-bearing decisions and the reasoning behind them.
 - **[docs/rfcs/](docs/rfcs/README.md)** — design proposals for larger future work (e.g. [RFC 001: parallel task execution](docs/rfcs/RFC_001_PARALLEL_TASK_EXECUTION.md)).
 
