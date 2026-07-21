@@ -18,6 +18,7 @@
     "windowMinutes": 300
   },
   "staleSessionMinutes": 30,
+  "activeSessionSeconds": 90,
   "reviewerGhTokenPath": "/Users/lucian/.config/factory/leanmacrofeed-reviewer-token",
   "paths": {
     "node": "/Users/lucian/.local/share/fnm/node-versions/v24.18.0/installation/bin/node",

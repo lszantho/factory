@@ -58,6 +58,38 @@ function logDecision(entry) {
   console.log(line);
 }
 
+// A fast tick cadence (RFC 003) means the same no-op outcome (waiting on a session, waiting on
+// CI, budget-exceeded, ...) can repeat every tick for a long time. Logging each repeat as its own
+// line turns the audit trail into a poll log instead of a timeline of real transitions. quietSig
+// identifies "is this the same outcome as last tick"; logQuiet only writes a line the first time a
+// given outcome is seen, and folds repeats into a count flushed (as a single 'coalesced' line) the
+// moment the outcome actually changes. Returns true iff this call produced a *new* line — callers
+// use that to also gate a notify() so notifications don't repeat every tick either.
+function quietSig(entry) {
+  return [entry.type, entry.reason ?? '', entry.taskId ?? '', entry.prNumber ?? '', entry.message ?? ''].join('|');
+}
+
+function flushQuiet(state) {
+  if (state.lastQuietSig && state.quietRepeatCount > 0) {
+    logDecision({ type: 'coalesced', of: state.lastQuietSig, repeats: state.quietRepeatCount });
+  }
+  state.lastQuietSig = null;
+  state.quietRepeatCount = 0;
+}
+
+function logQuiet(state, entry) {
+  const sig = quietSig(entry);
+  if (state.lastQuietSig === sig) {
+    state.quietRepeatCount = (state.quietRepeatCount ?? 0) + 1;
+    return false;
+  }
+  flushQuiet(state);
+  state.lastQuietSig = sig;
+  state.quietRepeatCount = 0;
+  logDecision(entry);
+  return true;
+}
+
 function runDab(config, args) {
   return execFileSync(config.paths.node, [config.paths.dabEntry, ...args], {
     cwd: config.repoDir,
@@ -157,6 +189,40 @@ function hasRunningSession(config, sessionName) {
       s.sessionId &&
       sessionRecentlyActive(s.cwd, s.sessionId, config.staleSessionMinutes ?? 30)
   );
+}
+
+// Fail-fast pre-check (RFC 003): while a developer session is genuinely still working and hasn't
+// opened a PR yet, gh/dab calls are guaranteed to find nothing new (no PR -> no CI -> no review) —
+// every one of them is pure waste at a fast tick cadence. This uses its own SHORT threshold
+// (config.activeSessionSeconds, default 90s), never config.staleSessionMinutes (30 min): that
+// threshold is deliberately lagging so a briefly-paused agent isn't re-dispatched over, and reusing
+// it here would delay noticing a just-opened PR by up to 30 minutes — a latency regression worse
+// than the tick interval it replaces. This checks the transcript mtime directly (no `claude
+// agents --json` subprocess), so a mid-flight skip costs nothing at all.
+function sessionActivelyWriting(task, activeSeconds) {
+  if (!task.sessionCwd || !task.sessionId) return false;
+  try {
+    const { mtimeMs } = fs.statSync(sessionTranscriptPath(task.sessionCwd, task.sessionId));
+    return Date.now() - mtimeMs < activeSeconds * 1000;
+  } catch {
+    return false; // transcript missing/unreadable -> not provably active -> run the full tick
+  }
+}
+
+// True only when nothing could possibly have changed since the last tick: every in-flight task is
+// pre-PR and its session is still actively writing, AND we're at the WIP cap so there's no new work
+// to start either (below the cap, decide() must still run so a new task can be dispatched). Once
+// any in-flight task has a PR, CI/review state is GitHub-side with no local proxy for it — this can
+// never fast-skip that task, only the pre-PR window.
+function canFastSkip(config, state) {
+  const inFlight = Object.keys(state.tasks).filter((id) => state.tasks[id].branch);
+  const wipLimit = config.maxConcurrentTasks ?? 1;
+  if (inFlight.length === 0 || inFlight.length < wipLimit) return false;
+  const activeSeconds = config.activeSessionSeconds ?? 90;
+  return inFlight.every((id) => {
+    const task = state.tasks[id];
+    return !task.prNumber && sessionActivelyWriting(task, activeSeconds);
+  });
 }
 
 function findPrForBranch(config, branch) {
@@ -265,7 +331,9 @@ function dispatch(config, state, { role, sessionName, prompt, worktree, fromPr }
   const spawned = claudeAgentsJson(config)
     .filter((s) => s.name === sessionName)
     .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))[0];
-  return { dispatched: true, sessionId: spawned?.sessionId, pid: spawned?.pid };
+  // cwd is recorded on the task so a later tick's fail-fast check (canFastSkip) can stat the
+  // session's transcript directly, with no `claude agents --json` subprocess needed.
+  return { dispatched: true, sessionId: spawned?.sessionId, cwd: spawned?.cwd, pid: spawned?.pid };
 }
 
 function findClosableEpic(statusPayload) {
@@ -549,6 +617,7 @@ function renderStatus(config) {
   const sync = authOk ? syncTargetRepo(config) : { ok: false, error: 'gh not authenticated' };
   const budget = budgetStatus(state, config);
   out.push(`gh auth: ${authOk ? 'ok' : 'NOT AUTHENTICATED'}    budget: ${budget.count}/${budget.cap} in ${config.budget?.windowMinutes ?? 300}m    autoMerge: ${config.autoMerge ? 'on' : 'off'}`);
+  out.push(`last tick: ${state.lastTickAt ?? '(never)'}`);
   out.push(`repo: ${repoHead(config)}${sync.ok ? '' : `   ⚠ NOT SYNCED to origin (${sync.error}) — showing local state`}`);
   out.push('');
 
@@ -637,6 +706,7 @@ function renderStatusJson(config) {
   return {
     repo: repoConfigName,
     timestamp: new Date().toISOString(),
+    lastTickAt: state.lastTickAt ?? null,
     ghAuth: authOk,
     repoSync: { ok: sync.ok, error: sync.ok ? undefined : sync.error },
     repoHead: repoHead(config),
@@ -686,123 +756,139 @@ function main() {
   const state = loadState();
   const decisionId = randomUUID();
 
-  if (!ghAuthOk(config)) {
-    logDecision({ decisionId, type: 'blocked', reason: 'gh-not-authenticated' });
-    return;
-  }
-
-  // Observe current reality, not a pre-merge snapshot. If the checkout can't be fast-forwarded to
-  // origin, decisions about what work to start next (findClosableEpic, dab next) would run against
-  // stale files — the exact cause of a spurious "re-close an already-closed epic" dispatch — so
-  // stop rather than act on a stale board.
-  const sync = syncTargetRepo(config);
-  if (!sync.ok) {
-    logDecision({ decisionId, type: 'blocked', reason: 'repo-sync-failed', detail: sync.error });
-    notify('Factory blocked', `${repoConfigName}: couldn't fast-forward ${config.repoDir} to origin — ${sync.error}`);
-    return;
-  }
-
-  const budget = budgetStatus(state, config);
-  if (!budget.allowed) {
-    logDecision({ decisionId, type: 'blocked', reason: 'budget-exceeded', count: budget.count, cap: budget.cap });
-    notify('Factory paused', `Dispatch cap reached (${budget.count}/${budget.cap} in window) — resuming once the window rolls over.`);
-    saveState(state);
-    return;
-  }
-
-  let decision;
+  // Every path below (however it returns) must persist the heartbeat + any pending coalesced-quiet
+  // count exactly once. A try/finally makes this true by construction instead of relying on a
+  // saveState(state) call placed before every return — a fast tick cadence made a missed one on any
+  // one path much more visible (it used to just mean a slightly stale --status between polls).
   try {
-    decision = decide(config, state);
-  } catch (err) {
-    logDecision({ decisionId, type: 'error', reason: 'decide-threw', message: String(err?.message ?? err) });
-    saveState(state);
-    return;
-  }
-
-  if (decision.action === 'blocked') {
-    logDecision({ decisionId, type: 'blocked', reason: decision.reason, detail: decision.detail, taskId: decision.taskId, prNumber: decision.prNumber });
-    const message = decision.reason === 'pr-closed-without-merge'
-      ? `${repoConfigName}: PR #${decision.prNumber} for "${decision.taskId}" was closed without merging — needs a human call (reopen, redo, or drop the task).`
-      : `dab check found issues in ${repoConfigName} — see factory/logs/${repoConfigName}.jsonl`;
-    notify('Factory blocked', message);
-    saveState(state);
-    return;
-  }
-
-  if (decision.action === 'idle') {
-    logDecision({ decisionId, type: 'idle', reason: decision.reason, detail: decision.detail });
-    saveState(state);
-    return;
-  }
-
-  if (decision.action === 'wait') {
-    logDecision({ decisionId, type: 'wait', reason: decision.reason, taskId: decision.taskId });
-    saveState(state);
-    return;
-  }
-
-  if (decision.action === 'merge') {
-    if (!config.autoMerge) {
-      logDecision({ decisionId, type: 'would-merge', taskId: decision.taskId, prNumber: decision.prNumber });
-      notify('Factory: ready to merge', `${repoConfigName} PR #${decision.prNumber} approved + CI green — autoMerge is off, merge manually.`);
-      saveState(state);
+    // Fail-fast (RFC 003): nothing below this point can matter if every in-flight task is pre-PR
+    // and its session is still actively writing, and there's no room to start new work anyway. Skip
+    // gh-auth/sync/dab entirely rather than spend a full reconcile confirming what's already known.
+    if (canFastSkip(config, state)) {
+      logQuiet(state, { decisionId, type: 'wait', reason: 'session-active-no-pr' });
       return;
     }
-    runGh(config, ['pr', 'merge', String(decision.prNumber), '--squash', '--delete-branch', '--repo', config.repo]);
-    // No `dab complete` here. Task completion is part of the developer's PR — the WORK_PLAN box is
-    // checked / the task archived inside the worktree and reviewed, so it lands on main atomically
-    // with the merge (ADR 008). The orchestrator only reads and fast-forwards this checkout, never
-    // writes to it; the next tick's sync reflects the completion.
-    delete state.tasks[decision.taskId];
-    logDecision({ decisionId, type: 'merged', taskId: decision.taskId, prNumber: decision.prNumber });
-    notify('Factory: merged', `${repoConfigName}: ${decision.taskId} merged and archived.`);
-    saveState(state);
-    return;
-  }
 
-  if (decision.action === 'reconcile-merged') {
-    // The PR landed through a channel other than this orchestrator's own 'merge' action above —
-    // a human running `gh pr merge` or clicking Merge on GitHub directly, most likely. Catch
-    // state up to match reality (same cleanup the 'merge' branch does, minus the merge itself,
-    // which already happened) instead of treating "no open PR" as "still needs work" and
-    // redispatching over already-finished work.
-    // Completion rode in with the merged PR (ADR 008) — nothing to mark done here. Just catch
-    // state up to the reality that this PR already merged (through whatever channel).
-    delete state.tasks[decision.taskId];
-    logDecision({ decisionId, type: 'reconciled-merged', taskId: decision.taskId, prNumber: decision.prNumber });
-    saveState(state);
-    return;
-  }
+    if (!ghAuthOk(config)) {
+      logQuiet(state, { decisionId, type: 'blocked', reason: 'gh-not-authenticated' });
+      return;
+    }
 
-  // action === 'dispatch'
-  const result = dispatch(config, state, decision);
-  if (!result.dispatched) {
-    logDecision({
-      decisionId,
-      type: config.dryRun ? 'would-dispatch' : 'skipped-dispatch',
-      role: decision.role,
-      taskId: decision.taskId,
-      reason: decision.reason,
-      dispatchSkipReason: result.reason,
-      wouldRunArgs: result.wouldRunArgs
-    });
-    saveState(state);
-    return;
-  }
+    // Observe current reality, not a pre-merge snapshot. If the checkout can't be fast-forwarded to
+    // origin, decisions about what work to start next (findClosableEpic, dab next) would run against
+    // stale files — the exact cause of a spurious "re-close an already-closed epic" dispatch — so
+    // stop rather than act on a stale board.
+    const sync = syncTargetRepo(config);
+    if (!sync.ok) {
+      if (logQuiet(state, { decisionId, type: 'blocked', reason: 'repo-sync-failed', detail: sync.error })) {
+        notify('Factory blocked', `${repoConfigName}: couldn't fast-forward ${config.repoDir} to origin — ${sync.error}`);
+      }
+      return;
+    }
 
-  decision.onDispatched?.();
-  const task = state.tasks[decision.taskId];
-  if (task) {
-    task.lastRole = decision.role;
-    task.lastDispatchedAt = Date.now();
-    task.sessionId = result.sessionId;
-    task.lastDecisionId = decisionId;
+    const budget = budgetStatus(state, config);
+    if (!budget.allowed) {
+      if (logQuiet(state, { decisionId, type: 'blocked', reason: 'budget-exceeded', count: budget.count, cap: budget.cap })) {
+        notify('Factory paused', `Dispatch cap reached (${budget.count}/${budget.cap} in window) — resuming once the window rolls over.`);
+      }
+      return;
+    }
+
+    let decision;
+    try {
+      decision = decide(config, state);
+    } catch (err) {
+      logQuiet(state, { decisionId, type: 'error', reason: 'decide-threw', message: String(err?.message ?? err) });
+      return;
+    }
+
+    if (decision.action === 'blocked') {
+      const isNew = logQuiet(state, { decisionId, type: 'blocked', reason: decision.reason, detail: decision.detail, taskId: decision.taskId, prNumber: decision.prNumber });
+      if (isNew) {
+        const message = decision.reason === 'pr-closed-without-merge'
+          ? `${repoConfigName}: PR #${decision.prNumber} for "${decision.taskId}" was closed without merging — needs a human call (reopen, redo, or drop the task).`
+          : `dab check found issues in ${repoConfigName} — see factory/logs/${repoConfigName}.jsonl`;
+        notify('Factory blocked', message);
+      }
+      return;
+    }
+
+    if (decision.action === 'idle') {
+      logQuiet(state, { decisionId, type: 'idle', reason: decision.reason, detail: decision.detail });
+      return;
+    }
+
+    if (decision.action === 'wait') {
+      logQuiet(state, { decisionId, type: 'wait', reason: decision.reason, taskId: decision.taskId });
+      return;
+    }
+
+    if (decision.action === 'merge') {
+      if (!config.autoMerge) {
+        if (logQuiet(state, { decisionId, type: 'would-merge', taskId: decision.taskId, prNumber: decision.prNumber })) {
+          notify('Factory: ready to merge', `${repoConfigName} PR #${decision.prNumber} approved + CI green — autoMerge is off, merge manually.`);
+        }
+        return;
+      }
+      runGh(config, ['pr', 'merge', String(decision.prNumber), '--squash', '--delete-branch', '--repo', config.repo]);
+      // No `dab complete` here. Task completion is part of the developer's PR — the WORK_PLAN box is
+      // checked / the task archived inside the worktree and reviewed, so it lands on main atomically
+      // with the merge (ADR 008). The orchestrator only reads and fast-forwards this checkout, never
+      // writes to it; the next tick's sync reflects the completion.
+      delete state.tasks[decision.taskId];
+      flushQuiet(state);
+      logDecision({ decisionId, type: 'merged', taskId: decision.taskId, prNumber: decision.prNumber });
+      notify('Factory: merged', `${repoConfigName}: ${decision.taskId} merged and archived.`);
+      return;
+    }
+
+    if (decision.action === 'reconcile-merged') {
+      // The PR landed through a channel other than this orchestrator's own 'merge' action above —
+      // a human running `gh pr merge` or clicking Merge on GitHub directly, most likely. Catch
+      // state up to match reality (same cleanup the 'merge' branch does, minus the merge itself,
+      // which already happened) instead of treating "no open PR" as "still needs work" and
+      // redispatching over already-finished work.
+      // Completion rode in with the merged PR (ADR 008) — nothing to mark done here. Just catch
+      // state up to the reality that this PR already merged (through whatever channel).
+      delete state.tasks[decision.taskId];
+      flushQuiet(state);
+      logDecision({ decisionId, type: 'reconciled-merged', taskId: decision.taskId, prNumber: decision.prNumber });
+      return;
+    }
+
+    // action === 'dispatch'
+    const result = dispatch(config, state, decision);
+    if (!result.dispatched) {
+      logQuiet(state, {
+        decisionId,
+        type: config.dryRun ? 'would-dispatch' : 'skipped-dispatch',
+        role: decision.role,
+        taskId: decision.taskId,
+        reason: decision.reason,
+        dispatchSkipReason: result.reason,
+        wouldRunArgs: result.wouldRunArgs
+      });
+      return;
+    }
+
+    decision.onDispatched?.();
+    const task = state.tasks[decision.taskId];
+    if (task) {
+      task.lastRole = decision.role;
+      task.lastDispatchedAt = Date.now();
+      task.sessionId = result.sessionId;
+      task.sessionCwd = result.cwd;
+      task.lastDecisionId = decisionId;
+    }
+    flushQuiet(state);
+    logDecision({ decisionId, type: 'dispatch', role: decision.role, taskId: decision.taskId, reason: decision.reason, sessionId: result.sessionId });
+    if (decision.role === 'architect') {
+      notify('Factory: architect dispatched', `${repoConfigName}: ${decision.reason} — ${decision.taskId}`);
+    }
+  } finally {
+    state.lastTickAt = new Date().toISOString();
+    saveState(state);
   }
-  logDecision({ decisionId, type: 'dispatch', role: decision.role, taskId: decision.taskId, reason: decision.reason, sessionId: result.sessionId });
-  if (decision.role === 'architect') {
-    notify('Factory: architect dispatched', `${repoConfigName}: ${decision.reason} — ${decision.taskId}`);
-  }
-  saveState(state);
 }
 
 if (STATUS_ONLY) statusMain();
