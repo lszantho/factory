@@ -221,17 +221,23 @@ function dispatch(config, state, { role, sessionName, prompt, worktree, fromPr }
   // permission-mode must be bypassPermissions, not acceptEdits, for real unattended operation:
   // acceptEdits still prompts for Bash commands (git/dab/gh/pnpm), which a --bg session can
   // never answer, leaving it permanently "blocked".
-  const args = ['--agent', role, '--permission-mode', 'bypassPermissions', '--bg', '-n', sessionName];
-  // Since prompts are off, the only tool-level guardrail is this denylist plus the target repo's
-  // AGENTS.md §6 instructions. `--disallowedTools` blocks the operations no role should ever run
-  // (merging, force-pushing, branch deletion, hard reset) as an enforced backstop to the personas'
-  // "never merge / never force-push / never touch main" rules. Config-driven so it's tunable and
-  // visible. NB: explicit denies are intended to take precedence over the permission mode; if a
-  // session is ever observed running a denied command under bypassPermissions, promote this to a
-  // PreToolUse hook (unconditionally enforced) — see docs/architecture/EXECUTION_AND_PERMISSIONS.md.
+  const args = [];
+  // `--disallowedTools` is a VARIADIC option (`<tools...>`): it greedily consumes every following
+  // argument until the next flag. So it MUST come first, terminated by `--agent` — otherwise, for a
+  // dispatch with no `--worktree`/`--from-pr` between it and the trailing prompt (i.e. every reviewer
+  // dispatch), the variadic swallows the prompt as bogus tool names and the session blocks at
+  // startup, never seeing its prompt (diagnosed after a re-review reviewer hung with no transcript
+  // while developers with `--worktree` — a flag that stopped the variadic — ran fine). Patterns are
+  // passed as separate argv elements (not comma-joined) so ones containing spaces stay intact.
+  // These denies are the only tool-level guardrail alongside AGENTS.md §6 (no merge / no force-push /
+  // no touching main); promote to a PreToolUse hook if airtight enforcement is needed — see
+  // docs/architecture/EXECUTION_AND_PERMISSIONS.md.
   if (config.disallowedTools?.length) {
-    args.push('--disallowedTools', config.disallowedTools.join(','));
+    args.push('--disallowedTools', ...config.disallowedTools);
   }
+  // --bg is incompatible with --print/--output-format; the prompt is the trailing positional and the
+  // session id is recovered afterward via `claude agents --json`, matched by the --name we gave it.
+  args.push('--agent', role, '--permission-mode', 'bypassPermissions', '--bg', '-n', sessionName);
   if (fromPr) {
     args.push('--from-pr', String(fromPr));
   } else if (worktree) {
