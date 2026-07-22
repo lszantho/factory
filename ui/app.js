@@ -152,8 +152,8 @@ function renderVerdict(status) {
       </div>
       <button id="btn-tick" class="btn-tick${tickRunning ? ' running' : ''}" ${btnDisabled ? 'disabled' : ''} title="${escHtml(btnTitle)}">
         <span class="btn-tick-spinner"></span>
-        <span class="btn-tick-icon">▶</span>
-        Run next tick
+        <span class="btn-tick-icon">${tickRunning ? '' : '▶'}</span>
+        ${tickRunning ? 'Running tick...' : 'Run next tick'}
       </button>
     </div>
   `;
@@ -487,6 +487,7 @@ async function runTick() {
   if (btn) {
     btn.disabled = true;
     btn.classList.add('running');
+    btn.innerHTML = `<span class="btn-tick-spinner"></span> Running tick...`;
   }
 
   // Open output panel
