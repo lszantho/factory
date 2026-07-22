@@ -14,6 +14,7 @@ let pollTimer        = null;
 let logLimit         = LOG_PAGE_SIZE;
 let lastStatus       = null;   // last successful status payload
 let tickRunning      = false;
+let lastTickCompletedAt = 0;   // timestamp of last tick completion, for post-dispatch cooldown
 let autopilotInfo    = { scheduled: false, intervalSeconds: null, nextRunEta: null };
 let viewMode         = localStorage.getItem('factory.viewMode') || 'single';
 
@@ -132,20 +133,28 @@ function renderVerdict(status) {
   const icon    = marker === 'act' ? '▶' : marker === 'blocked' ? '⚠' : '⏸';
   const label   = marker === 'act' ? 'Act — run next tick now' : marker === 'blocked' ? 'Blocked — needs attention' : 'Wait — nothing to do yet';
 
-  // Button is enabled ONLY when the orchestrator verdict is actionable ('act') and no agent/tick is active
+  // Button is enabled ONLY when the orchestrator verdict is actionable ('act') and no agent/tick is active.
+  // Post-tick cooldown: after a tick dispatches an agent, sessionRunning may take a few seconds to
+  // become true (the agent process needs to start and write its transcript). During that window the
+  // status API returns sessionRunning:false + marker:'act', which would incorrectly re-enable the
+  // button. A 15-second cooldown after any tick prevents this.
+  const POST_TICK_COOLDOWN_MS = 15_000;
   const runningTask = Object.values(status.tasks).find((t) => t.sessionRunning);
   const hasSessionRunning = !!runningTask;
+  const inCooldown = lastTickCompletedAt && (Date.now() - lastTickCompletedAt < POST_TICK_COOLDOWN_MS);
   const isActable = marker === 'act';
-  const btnDisabled = !isActable || tickRunning || autopilotInfo.scheduled || hasSessionRunning;
+  const btnDisabled = !isActable || tickRunning || autopilotInfo.scheduled || hasSessionRunning || inCooldown;
 
   let btnText = 'Run next tick';
   if (tickRunning)             btnText = 'Running tick...';
   else if (hasSessionRunning)  btnText = `${runningTask.lastRole ?? 'Agent'} running in background...`;
+  else if (inCooldown)         btnText = 'Agent starting up...';
 
   let btnTitle = 'Run node orchestrator.mjs ' + (currentRepo ?? '');
   if (tickRunning)             btnTitle = 'A tick is already running';
   else if (autopilotInfo.scheduled) btnTitle = `Autopilot is active (launchd runs every ${Math.round((autopilotInfo.intervalSeconds ?? 900) / 60)}m)`;
   else if (hasSessionRunning)  btnTitle = `An agent session (${runningTask.lastRole ?? 'agent'}) is currently running in background`;
+  else if (inCooldown)         btnTitle = 'Waiting for agent process to initialize...';
   else if (marker === 'wait')  btnTitle = `Wait: ${nt.description}`;
   else if (marker === 'blocked') btnTitle = `Blocked: ${nt.description}`;
 
@@ -513,7 +522,7 @@ async function runTick() {
     if (res.status === 409) {
       addLine('[tick already in progress — try again in a moment]', 'meta');
       tickRunning = false;
-      if (btn) { btn.disabled = false; btn.classList.remove('running'); }
+      if (lastStatus) renderVerdict(lastStatus);
       return;
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -547,9 +556,16 @@ async function runTick() {
   } catch (err) {
     addLine(`[error: ${err.message}]`, 'blocked');
   } finally {
-    tickRunning = false;
-    // Refresh status immediately after a tick
+    // Keep tickRunning=true until fetchStatus completes, so the polling timer
+    // can't sneak in a renderVerdict() that re-enables the button prematurely.
+    lastTickCompletedAt = Date.now();
     await fetchStatus();
+    tickRunning = false;
+    // One final re-render now that tickRunning is false — fetchStatus already
+    // called renderVerdict while tickRunning was true (button stayed disabled).
+    // This re-render picks up the fresh status with tickRunning=false but will
+    // still respect the post-tick cooldown via lastTickCompletedAt.
+    if (lastStatus) renderVerdict(lastStatus);
   }
 }
 
