@@ -54,8 +54,20 @@ function relativeTime(isoString) {
   return `${Math.round(diffH / 24)}d ago`;
 }
 
-function formatDuration(ms) {
-  if (!ms || ms <= 0) return '0s';
+function formatDuration(input) {
+  if (!input) return '—';
+  let ms = 0;
+  if (typeof input === 'number') {
+    ms = input;
+  } else if (typeof input === 'string') {
+    const time = new Date(input).getTime();
+    if (isNaN(time)) return '—';
+    ms = Date.now() - time;
+  } else if (input instanceof Date) {
+    ms = Date.now() - input.getTime();
+  }
+
+  if (isNaN(ms) || ms <= 0) return '0s';
   const totalSec = Math.floor(ms / 1000);
   const sec = totalSec % 60;
   const totalMin = Math.floor(totalSec / 60);
@@ -272,7 +284,7 @@ function renderTasks(status) {
           ${prHtml}
           <div class="task-meta-item">
             <div class="task-meta-label">Active Time</div>
-            <div class="task-meta-value highlight">⏱ ${t.lastDispatchedAt ? formatDuration(Date.now() - t.lastDispatchedAt) : '—'}</div>
+            <div class="task-meta-value highlight">⏱ ${t.lastDispatchedAt ? formatDuration(t.lastDispatchedAt) : '—'}</div>
           </div>
           <div class="task-meta-item">
             <div class="task-meta-label">Branch</div>
