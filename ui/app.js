@@ -15,11 +15,17 @@ let logLimit         = LOG_PAGE_SIZE;
 let lastStatus       = null;   // last successful status payload
 let tickRunning      = false;
 let autopilotInfo    = { scheduled: false, intervalSeconds: null, nextRunEta: null };
+let viewMode         = localStorage.getItem('factory.viewMode') || 'single';
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 
 const repoSelect          = $('repo-select');
+const viewSingle          = $('view-single');
+const viewPortfolio       = $('view-portfolio');
+const singleRepoView      = $('single-repo-view');
+const portfolioView       = $('portfolio-view');
+const portfolioGrid       = $('portfolio-grid');
 const pollDot             = $('poll-dot');
 const pollLabel           = $('poll-label');
 const autopilotBadge      = $('autopilot-badge');
@@ -110,14 +116,16 @@ function renderVerdict(status) {
   const icon    = marker === 'act' ? '▶' : marker === 'blocked' ? '⚠' : '⏸';
   const label   = marker === 'act' ? 'Act — run next tick now' : marker === 'blocked' ? 'Blocked — needs attention' : 'Wait — nothing to do yet';
 
-  // Button is disabled when: a tick is running, autopilot is driving it, or an agent session is active.
+  // Button is enabled ONLY when the orchestrator verdict is actionable ('act')
   const hasSessionRunning = Object.values(status.tasks).some((t) => t.sessionRunning);
-  const btnDisabled = tickRunning || autopilotInfo.scheduled || hasSessionRunning;
+  const isActable = marker === 'act';
+  const btnDisabled = !isActable || tickRunning || autopilotInfo.scheduled;
 
   let btnTitle = 'Run node orchestrator.mjs ' + (currentRepo ?? '');
   if (tickRunning)             btnTitle = 'A tick is already running';
   else if (autopilotInfo.scheduled) btnTitle = `Autopilot is active (launchd runs every ${Math.round((autopilotInfo.intervalSeconds ?? 900) / 60)}m)`;
-  else if (hasSessionRunning)  btnTitle = 'An agent session is currently running — autopilot will pick this up on the next tick';
+  else if (marker === 'wait')  btnTitle = `Wait: ${nt.description}`;
+  else if (marker === 'blocked') btnTitle = `Blocked: ${nt.description}`;
 
   verdictRegion.innerHTML = `
     <div class="verdict-banner ${escHtml(marker)}">
@@ -348,8 +356,9 @@ async function fetchStatus() {
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  fetchStatus();
-  pollTimer = setInterval(fetchStatus, POLL_INTERVAL_MS);
+  const pollFn = () => (viewMode === 'portfolio' ? fetchPortfolio() : fetchStatus());
+  pollFn();
+  pollTimer = setInterval(pollFn, POLL_INTERVAL_MS);
 }
 
 // ── Repo selection ────────────────────────────────────────────────────────────
@@ -473,6 +482,99 @@ async function runTick() {
   }
 }
 
+// ── Portfolio View ────────────────────────────────────────────────────────────
+
+async function fetchPortfolio() {
+  pollDot.classList.add('active');
+  try {
+    const res = await fetch('/api/portfolio');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    disconnectedBanner.classList.remove('visible');
+    pollLabel.textContent = `updated ${shortTime(new Date().toISOString())}`;
+    renderPortfolio(data.portfolio ?? []);
+  } catch (err) {
+    console.error('Portfolio poll failed:', err);
+    disconnectedBanner.classList.add('visible');
+    pollLabel.textContent = 'disconnected';
+  } finally {
+    setTimeout(() => pollDot.classList.remove('active'), 400);
+  }
+}
+
+function renderPortfolio(cards) {
+  if (cards.length === 0) {
+    portfolioGrid.innerHTML = '<div class="tasks-empty">No active repositories found.</div>';
+    return;
+  }
+
+  portfolioGrid.innerHTML = cards.map((c) => {
+    const epicTitle = c.activeEpic ? escHtml(c.activeEpic.title) : 'No active epic';
+    const nowTask = c.now ? `
+      <div>
+        <div class="portfolio-section-label">▶ now</div>
+        <div class="portfolio-now-box">
+          <span class="portfolio-now-task">${escHtml(c.now.id)}</span>
+          <span class="pill pill-role-${escHtml(c.now.role)}">${escHtml(c.now.role)}</span>
+        </div>
+      </div>
+    ` : '<div class="portfolio-now-box" style="color:var(--text-muted)">No active task</div>';
+
+    const nextTasks = c.next.length > 0 ? `
+      <div>
+        <div class="portfolio-section-label">next (highest priority top)</div>
+        <div class="portfolio-next-list">
+          ${c.next.map(t => `<div class="portfolio-next-item">${escHtml(t.id)}</div>`).join('')}
+        </div>
+      </div>
+    ` : '';
+
+    return `
+      <div class="portfolio-card">
+        <div class="portfolio-card-header">
+          <div class="portfolio-repo-name">${escHtml(c.repo)}</div>
+          <div class="portfolio-epic-badge">${epicTitle}</div>
+        </div>
+        <div class="portfolio-progress-bar">
+          <div class="portfolio-progress-track">
+            <div class="portfolio-progress-fill" style="width:100%"></div>
+          </div>
+          <span>${c.progress.remaining} remaining</span>
+        </div>
+        ${nowTask}
+        ${nextTasks}
+      </div>
+    `;
+  }).join('');
+}
+
+function setViewMode(mode) {
+  viewMode = mode;
+  localStorage.setItem('factory.viewMode', mode);
+  if (mode === 'portfolio') {
+    viewSingle.classList.remove('active');
+    viewPortfolio.classList.add('active');
+    singleRepoView.classList.add('hidden');
+    portfolioView.classList.remove('hidden');
+    repoSelect.classList.add('hidden');
+    fetchPortfolio();
+  } else {
+    viewPortfolio.classList.remove('active');
+    viewSingle.classList.add('active');
+    portfolioView.classList.add('hidden');
+    singleRepoView.classList.remove('hidden');
+    repoSelect.classList.remove('hidden');
+    fetchStatus();
+  }
+}
+
+viewSingle.addEventListener('click', () => setViewMode('single'));
+viewPortfolio.addEventListener('click', () => setViewMode('portfolio'));
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 
 loadRepos();
+if (viewMode === 'portfolio') {
+  setViewMode('portfolio');
+}
+

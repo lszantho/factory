@@ -195,6 +195,7 @@ body {
   position: absolute;
   inset: 0;
   opacity: 0.06;
+  pointer-events: none;
 }
 .verdict-banner.act {
   background: rgba(63,185,80,0.08);
@@ -232,6 +233,8 @@ body {
 
 /* "Run next tick" button */
 .btn-tick {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -581,6 +584,134 @@ body {
 .skeleton-gauge   { height: 72px; }
 .skeleton-task    { height: 100px; margin-bottom: 10px; }
 .skeleton-timeline { height: 200px; }
+
+/* ── View Switcher ─────────────────────────────────────────────────────────── */
+.view-switch {
+  display: flex;
+  background: var(--bg-elevated);
+  padding: 3px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-muted);
+}
+.view-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 0.76rem;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.view-btn:hover { color: var(--text-secondary); }
+.view-btn.active {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+/* ── Portfolio Grid & Cards ────────────────────────────────────────────────── */
+.portfolio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 20px;
+}
+.portfolio-card {
+  background: var(--bg-glass);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  transition: border-color 0.2s, transform 0.15s;
+}
+.portfolio-card:hover { border-color: var(--border-muted); transform: translateY(-2px); }
+.portfolio-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.portfolio-repo-name {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.portfolio-epic-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #58a6ff;
+  background: rgba(88,166,255,0.1);
+  border: 1px solid rgba(88,166,255,0.3);
+  padding: 3px 9px;
+  border-radius: 99px;
+}
+.portfolio-progress-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.portfolio-progress-track {
+  flex: 1;
+  height: 4px;
+  background: var(--border-subtle);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.portfolio-progress-fill {
+  height: 100%;
+  background: var(--color-act);
+  border-radius: 99px;
+}
+
+.portfolio-section-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.portfolio-now-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.portfolio-now-task {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+.portfolio-next-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.portfolio-next-item {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.portfolio-next-item::before {
+  content: '•';
+  color: var(--text-muted);
+}
 
 /* ── Utilities ─────────────────────────────────────────────────────────────── */
 .hidden { display: none !important; }

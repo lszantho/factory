@@ -69,6 +69,71 @@ function handleRepos(res) {
   }
 }
 
+/** GET /api/portfolio — aggregate cross-repo portfolio status for all configured repos */
+function handlePortfolio(res) {
+  try {
+    const repos = listRepos();
+    const portfolio = repos.map((repo) => {
+      const config = loadConfig(repo);
+      if (!config) return null;
+
+      let status = null;
+      try {
+        const raw = execFileSync(config.paths.node, [
+          path.join(FACTORY_DIR, 'orchestrator.mjs'), repo, '--status', '--json'
+        ], { cwd: FACTORY_DIR, encoding: 'utf-8', timeout: 60_000 });
+        const jsonStart = raw.indexOf('{');
+        if (jsonStart !== -1) status = JSON.parse(raw.slice(jsonStart));
+      } catch (err) {
+        console.error(`Status failed for ${repo}:`, err);
+      }
+
+      let dabStatus = { activeEpics: [], activeTasks: [] };
+      try {
+        const dabRaw = execFileSync(config.paths.node, [config.paths.dabEntry, 'status'], {
+          cwd: config.repoDir, encoding: 'utf-8'
+        });
+        dabStatus = JSON.parse(dabRaw);
+      } catch (err) {
+        console.error(`Dab status failed for ${repo}:`, err);
+      }
+
+      const activeEpic = dabStatus.activeEpics?.[0] ?? null;
+      const epicTasks = dabStatus.activeTasks?.filter(t => activeEpic && t.epic === activeEpic.id) ?? [];
+      const inFlightTasks = status?.tasks ? Object.keys(status.tasks) : [];
+      const currentTaskId = status?.nextTick?.taskId || inFlightTasks[0] || (epicTasks[0]?.id ?? null);
+      const currentTaskDetail = status?.tasks?.[currentTaskId] || null;
+
+      const nextTasks = epicTasks
+        .filter(t => t.id !== currentTaskId)
+        .map(t => ({ id: t.id, title: t.title }));
+
+      return {
+        repo,
+        activeEpic: activeEpic ? { id: activeEpic.id, title: activeEpic.title } : null,
+        progress: {
+          remaining: epicTasks.length,
+          inFlight: inFlightTasks.length,
+        },
+        now: currentTaskId ? {
+          id: currentTaskId,
+          role: currentTaskDetail?.lastRole || status?.nextTick?.role || 'developer',
+          sessionRunning: currentTaskDetail?.sessionRunning ?? false,
+          pr: currentTaskDetail?.pr ?? null,
+          action: status?.nextTick?.action || 'wait'
+        } : null,
+        next: nextTasks,
+        nextTickMarker: status?.nextTick?.marker || 'wait',
+        nextTickDescription: status?.nextTick?.description || 'No active tick'
+      };
+    }).filter(Boolean);
+
+    json(res, 200, { portfolio });
+  } catch (err) {
+    error(res, 500, String(err.message));
+  }
+}
+
 /** GET /api/status/:repo — run `orchestrator.mjs <repo> --status --json` and return parsed output */
 function handleStatus(res, repo) {
   const config = loadConfig(repo);
@@ -243,6 +308,10 @@ const server = http.createServer((req, res) => {
   // API routes
   if (pathname === '/api/repos' && method === 'GET') {
     return handleRepos(res);
+  }
+
+  if (pathname === '/api/portfolio' && method === 'GET') {
+    return handlePortfolio(res);
   }
 
   const statusMatch = pathname.match(/^\/api\/status\/([^/]+)$/);

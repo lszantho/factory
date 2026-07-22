@@ -4,7 +4,7 @@
   "dryRun": false,
   "autoMerge": true,
   "maxConcurrentTasks": 1,
-  "stopAfterTask": "migrate_event_ledger_to_registry_event_title_resolution",
+  "stopAfterTask": "remove_legacy_hardcoded_fetcher_and_sweep_logic",
   "disallowedTools": [
     "Bash(gh pr merge*)",
     "Bash(git push --force*)",
@@ -14,7 +14,7 @@
     "Bash(git branch -D*)"
   ],
   "budget": {
-    "maxDispatchesPerWindow": 8,
+    "maxDispatchesPerWindow": 20,
     "windowMinutes": 300
   },
   "staleSessionMinutes": 30,

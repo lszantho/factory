@@ -19,6 +19,10 @@
         Factory
       </a>
       <select id="repo-select" class="repo-select" title="Select target repo"></select>
+      <div class="view-switch">
+        <button id="view-single" class="view-btn active">Repo View</button>
+        <button id="view-portfolio" class="view-btn">Portfolio View</button>
+      </div>
       <div class="header-spacer"></div>
       <div id="autopilot-badge" class="autopilot-badge hidden" title="Orchestrator is running on a launchd schedule">
         <span class="autopilot-badge-dot"></span>
@@ -39,49 +43,62 @@
       ⚠ Cannot reach the factory server. Make sure <code>node server.mjs</code> is running.
     </div>
 
-    <!-- Verdict banner -->
-    <div id="verdict-region" aria-live="polite" aria-label="Next tick verdict">
-      <div class="skeleton skeleton-verdict"></div>
-    </div>
+    <!-- ── Single Repo View ────────────────────────────────────────────── -->
+    <div id="single-repo-view">
+      <!-- Verdict banner -->
+      <div id="verdict-region" aria-live="polite" aria-label="Next tick verdict">
+        <div class="skeleton skeleton-verdict"></div>
+      </div>
 
-    <!-- Tick output panel -->
-    <div id="tick-panel" class="tick-panel" role="log" aria-label="Tick output">
-      <div class="tick-panel-header">▶ Tick output</div>
-      <div id="tick-output" class="tick-panel-output"></div>
-    </div>
+      <!-- Tick output panel -->
+      <div id="tick-panel" class="tick-panel" role="log" aria-label="Tick output">
+        <div class="tick-panel-header">▶ Tick output</div>
+        <div id="tick-output" class="tick-panel-output"></div>
+      </div>
 
-    <!-- Gauges -->
-    <div id="gauges-region" aria-label="System gauges">
-      <div class="gauges">
-        <div class="skeleton skeleton-gauge"></div>
-        <div class="skeleton skeleton-gauge"></div>
-        <div class="skeleton skeleton-gauge"></div>
-        <div class="skeleton skeleton-gauge"></div>
-        <div class="skeleton skeleton-gauge"></div>
+      <!-- Gauges -->
+      <div id="gauges-region" aria-label="System gauges">
+        <div class="gauges">
+          <div class="skeleton skeleton-gauge"></div>
+          <div class="skeleton skeleton-gauge"></div>
+          <div class="skeleton skeleton-gauge"></div>
+          <div class="skeleton skeleton-gauge"></div>
+          <div class="skeleton skeleton-gauge"></div>
+        </div>
+      </div>
+
+      <!-- Tasks -->
+      <div>
+        <div class="section-header">
+          <span class="section-title">In-flight tasks</span>
+          <span id="tasks-count" class="section-count">—</span>
+        </div>
+        <div id="tasks-region" aria-label="In-flight tasks">
+          <div class="skeleton skeleton-task"></div>
+        </div>
+      </div>
+
+      <!-- Timeline -->
+      <div>
+        <div class="section-header">
+          <span class="section-title">Decision log</span>
+        </div>
+        <div id="timeline-region" class="timeline" aria-label="Decision timeline">
+          <div class="skeleton skeleton-timeline"></div>
+        </div>
+        <div class="timeline-load-more">
+          <button id="btn-load-more" class="btn-load-more">Load more</button>
+        </div>
       </div>
     </div>
 
-    <!-- Tasks -->
-    <div>
+    <!-- ── Portfolio View ──────────────────────────────────────────────── -->
+    <div id="portfolio-view" class="portfolio-view hidden">
       <div class="section-header">
-        <span class="section-title">In-flight tasks</span>
-        <span id="tasks-count" class="section-count">—</span>
+        <span class="section-title">Cross-Repo Portfolio Overview</span>
       </div>
-      <div id="tasks-region" aria-label="In-flight tasks">
+      <div id="portfolio-grid" class="portfolio-grid">
         <div class="skeleton skeleton-task"></div>
-      </div>
-    </div>
-
-    <!-- Timeline -->
-    <div>
-      <div class="section-header">
-        <span class="section-title">Decision log</span>
-      </div>
-      <div id="timeline-region" class="timeline" aria-label="Decision timeline">
-        <div class="skeleton skeleton-timeline"></div>
-      </div>
-      <div class="timeline-load-more">
-        <button id="btn-load-more" class="btn-load-more">Load more</button>
       </div>
     </div>
 
