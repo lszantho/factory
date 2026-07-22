@@ -132,14 +132,20 @@ function renderVerdict(status) {
   const icon    = marker === 'act' ? '▶' : marker === 'blocked' ? '⚠' : '⏸';
   const label   = marker === 'act' ? 'Act — run next tick now' : marker === 'blocked' ? 'Blocked — needs attention' : 'Wait — nothing to do yet';
 
-  // Button is enabled ONLY when the orchestrator verdict is actionable ('act')
-  const hasSessionRunning = Object.values(status.tasks).some((t) => t.sessionRunning);
+  // Button is enabled ONLY when the orchestrator verdict is actionable ('act') and no agent/tick is active
+  const runningTask = Object.values(status.tasks).find((t) => t.sessionRunning);
+  const hasSessionRunning = !!runningTask;
   const isActable = marker === 'act';
-  const btnDisabled = !isActable || tickRunning || autopilotInfo.scheduled;
+  const btnDisabled = !isActable || tickRunning || autopilotInfo.scheduled || hasSessionRunning;
+
+  let btnText = 'Run next tick';
+  if (tickRunning)             btnText = 'Running tick...';
+  else if (hasSessionRunning)  btnText = `${runningTask.lastRole ?? 'Agent'} running in background...`;
 
   let btnTitle = 'Run node orchestrator.mjs ' + (currentRepo ?? '');
   if (tickRunning)             btnTitle = 'A tick is already running';
   else if (autopilotInfo.scheduled) btnTitle = `Autopilot is active (launchd runs every ${Math.round((autopilotInfo.intervalSeconds ?? 900) / 60)}m)`;
+  else if (hasSessionRunning)  btnTitle = `An agent session (${runningTask.lastRole ?? 'agent'}) is currently running in background`;
   else if (marker === 'wait')  btnTitle = `Wait: ${nt.description}`;
   else if (marker === 'blocked') btnTitle = `Blocked: ${nt.description}`;
 
@@ -150,10 +156,10 @@ function renderVerdict(status) {
         <div class="verdict-label">${escHtml(label)}</div>
         <div class="verdict-description">${escHtml(nt.description)}</div>
       </div>
-      <button id="btn-tick" class="btn-tick${tickRunning ? ' running' : ''}" ${btnDisabled ? 'disabled' : ''} title="${escHtml(btnTitle)}">
+      <button id="btn-tick" class="btn-tick${tickRunning || hasSessionRunning ? ' running' : ''}" ${btnDisabled ? 'disabled' : ''} title="${escHtml(btnTitle)}">
         <span class="btn-tick-spinner"></span>
-        <span class="btn-tick-icon">${tickRunning ? '' : '▶'}</span>
-        ${tickRunning ? 'Running tick...' : 'Run next tick'}
+        <span class="btn-tick-icon">${tickRunning || hasSessionRunning ? '' : '▶'}</span>
+        ${escHtml(btnText)}
       </button>
     </div>
   `;
