@@ -713,5 +713,27 @@ body {
   color: var(--text-muted);
 }
 
+/* ── Duration Badges ───────────────────────────────────────────────────────── */
+.timeline-duration-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #58a6ff;
+  background: rgba(88,166,255,0.1);
+  border: 1px solid rgba(88,166,255,0.25);
+  padding: 2px 7px;
+  border-radius: 99px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.timeline-duration-badge.total {
+  color: var(--color-act);
+  background: rgba(63,185,80,0.12);
+  border-color: rgba(63,185,80,0.3);
+}
+
 /* ── Utilities ─────────────────────────────────────────────────────────────── */
 .hidden { display: none !important; }

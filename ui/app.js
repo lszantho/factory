@@ -43,15 +43,31 @@ const btnLoadMore         = $('btn-load-more');
 
 function relativeTime(isoString) {
   if (!isoString) return '—';
-  const diffMs  = Date.now() - new Date(isoString).getTime();
-  const diffSec = Math.round(diffMs / 1000);
-  if (diffSec < 5)   return 'just now';
-  if (diffSec < 60)  return `${diffSec}s ago`;
+  const d = new Date(isoString);
+  const diffSec = Math.round((Date.now() - d.getTime()) / 1000);
+  if (diffSec < 60)   return `${diffSec}s ago`;
   const diffMin = Math.round(diffSec / 60);
   if (diffMin < 60)  return `${diffMin}m ago`;
   const diffH = Math.round(diffMin / 60);
   if (diffH < 24)    return `${diffH}h ago`;
   return `${Math.round(diffH / 24)}d ago`;
+}
+
+function formatDuration(ms) {
+  if (!ms || ms <= 0) return '0s';
+  const totalSec = Math.floor(ms / 1000);
+  const sec = totalSec % 60;
+  const totalMin = Math.floor(totalSec / 60);
+  const min = totalMin % 60;
+  const hours = Math.floor(totalMin / 60);
+
+  if (hours > 0) {
+    return min > 0 ? `${hours}h ${min}m` : `${hours}h`;
+  }
+  if (totalMin > 0) {
+    return sec > 0 ? `${totalMin}m ${sec}s` : `${totalMin}m`;
+  }
+  return `${totalSec}s`;
 }
 
 function shortTime(isoString) {
@@ -240,8 +256,8 @@ function renderTasks(status) {
         <div class="task-card-body">
           ${prHtml}
           <div class="task-meta-item">
-            <div class="task-meta-label">Dispatched</div>
-            <div class="task-meta-value">${relativeTime(t.lastDispatchedAt)}</div>
+            <div class="task-meta-label">Active Time</div>
+            <div class="task-meta-value highlight">⏱ ${t.lastDispatchedAt ? formatDuration(Date.now() - t.lastDispatchedAt) : '—'}</div>
           </div>
           <div class="task-meta-item">
             <div class="task-meta-label">Branch</div>
@@ -253,20 +269,68 @@ function renderTasks(status) {
   }).join('');
 }
 
+function enrichTimelineDurations(entries) {
+  // Process entries chronologically (oldest to newest)
+  const chronological = [...entries].reverse();
+  const taskState = {}; // taskId -> { firstStart: timestamp, lastDispatch: { role, timestamp } }
+
+  for (const e of chronological) {
+    if (!e.taskId || !e.timestamp) continue;
+    const tTime = new Date(e.timestamp).getTime();
+    if (isNaN(tTime)) continue;
+
+    const state = taskState[e.taskId] || { firstStart: null, lastDispatch: null };
+
+    if (e.type === 'dispatch') {
+      if (state.lastDispatch) {
+        e.stepDurationMs = tTime - state.lastDispatch.timestamp;
+        e.prevRole = state.lastDispatch.role;
+      }
+      if (!state.firstStart) {
+        state.firstStart = tTime;
+      }
+      state.lastDispatch = { role: e.role, timestamp: tTime };
+    } else if (e.type === 'merged' || e.type === 'reconciled-merged') {
+      if (state.lastDispatch) {
+        e.stepDurationMs = tTime - state.lastDispatch.timestamp;
+        e.prevRole = state.lastDispatch.role;
+      }
+      if (state.firstStart) {
+        e.totalTaskDurationMs = tTime - state.firstStart;
+      }
+    }
+    taskState[e.taskId] = state;
+  }
+}
+
 function renderTimeline(entries) {
   if (entries.length === 0) {
     timelineRegion.innerHTML = '<div class="timeline-empty">No decisions logged yet.</div>';
     return;
   }
 
+  enrichTimelineDurations(entries);
+
   timelineRegion.innerHTML = entries.map((e) => {
+    let durationBadge = '';
+    if (e.stepDurationMs && e.stepDurationMs > 0) {
+      const prevRoleLabel = e.prevRole ? `${e.prevRole} ` : '';
+      durationBadge += `<span class="timeline-duration-badge" title="Duration of preceding ${prevRoleLabel}step">⏱ ${formatDuration(e.stepDurationMs)}</span>`;
+    }
+    if (e.totalTaskDurationMs && e.totalTaskDurationMs > 0) {
+      durationBadge += `<span class="timeline-duration-badge total" title="Total elapsed task duration from start to merge">⌛ Total: ${formatDuration(e.totalTaskDurationMs)}</span>`;
+    }
+
     const desc = buildTimelineDesc(e);
     return `
       <div class="timeline-entry">
         <div class="timeline-time">${shortTime(e.timestamp)}</div>
         <div class="timeline-icon">${typeIcon(e.type)}</div>
         <div class="timeline-body">
-          <div class="timeline-desc" style="color:${typeColor(e.type)}">${desc}</div>
+          <div class="timeline-desc" style="color:${typeColor(e.type)}">
+            ${desc}
+            ${durationBadge}
+          </div>
           ${e.taskId ? `<div class="timeline-task">${escHtml(e.taskId)}</div>` : ''}
         </div>
       </div>
