@@ -39,6 +39,14 @@ const tasksCount          = $('tasks-count');
 const tasksRegion         = $('tasks-region');
 const timelineRegion      = $('timeline-region');
 const btnLoadMore         = $('btn-load-more');
+const btnReportIssue      = $('btn-report-issue');
+const bugModalBackdrop    = $('bug-modal-backdrop');
+const bugModal            = $('bug-modal');
+const bugDescription      = $('bug-description');
+const btnBugCancel        = $('btn-bug-cancel');
+const btnBugSubmit        = $('btn-bug-submit');
+const bugError            = $('bug-error');
+const bugSuccess          = $('bug-success');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -671,6 +679,75 @@ function setViewMode(mode) {
 
 viewSingle.addEventListener('click', () => setViewMode('single'));
 viewPortfolio.addEventListener('click', () => setViewMode('portfolio'));
+
+// ── Bug Report Modal ────────────────────────────────────────────────────────────
+
+function showBugModal() {
+  bugModal.classList.remove('hidden');
+  bugModalBackdrop.classList.remove('hidden');
+  bugDescription.value = '';
+  bugError.classList.add('hidden');
+  bugSuccess.classList.add('hidden');
+  btnBugSubmit.disabled = false;
+  btnBugSubmit.textContent = 'Submit Report';
+  bugDescription.focus();
+}
+
+function hideBugModal() {
+  bugModal.classList.add('hidden');
+  bugModalBackdrop.classList.add('hidden');
+}
+
+btnReportIssue.addEventListener('click', showBugModal);
+btnBugCancel.addEventListener('click', hideBugModal);
+bugModalBackdrop.addEventListener('click', hideBugModal);
+
+btnBugSubmit.addEventListener('click', async () => {
+  if (!currentRepo) {
+    bugError.textContent = 'No repository selected.';
+    bugError.classList.remove('hidden');
+    return;
+  }
+  
+  const desc = bugDescription.value.trim();
+  if (!desc) {
+    bugError.textContent = 'Please provide a description.';
+    bugError.classList.remove('hidden');
+    return;
+  }
+
+  bugError.classList.add('hidden');
+  btnBugSubmit.disabled = true;
+  btnBugSubmit.textContent = 'Collecting data...';
+
+  try {
+    const res = await fetch(`/api/bugreport/${currentRepo}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        description: desc,
+        uiState: lastStatus
+      })
+    });
+    
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Server error');
+
+    bugSuccess.textContent = `Report saved: ${data.filename}`;
+    bugSuccess.classList.remove('hidden');
+    bugDescription.value = '';
+    btnBugSubmit.textContent = 'Submitted';
+    
+    setTimeout(() => {
+      hideBugModal();
+    }, 2000);
+  } catch (err) {
+    bugError.textContent = err.message;
+    bugError.classList.remove('hidden');
+    btnBugSubmit.disabled = false;
+    btnBugSubmit.textContent = 'Submit Report';
+  }
+});
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 

@@ -23,6 +23,7 @@
         <button id="view-single" class="view-btn active">Repo View</button>
         <button id="view-portfolio" class="view-btn">Portfolio View</button>
       </div>
+      <button id="btn-report-issue" class="btn-report-issue" title="Report a bug and snapshot the system state">Report Issue</button>
       <div class="header-spacer"></div>
       <div id="autopilot-badge" class="autopilot-badge hidden" title="Orchestrator is running on a launchd schedule">
         <span class="autopilot-badge-dot"></span>
@@ -105,6 +106,24 @@
   </main>
 </div>
 
-<script src="/app.js"></script>
+<!-- ── Bug Report Modal ────────────────────────────────────────────────── -->
+<div id="bug-modal-backdrop" class="modal-backdrop hidden"></div>
+<div id="bug-modal" class="modal hidden" role="dialog" aria-labelledby="bug-modal-title" aria-modal="true">
+  <div class="modal-header">
+    <h2 id="bug-modal-title">Report Issue</h2>
+  </div>
+  <div class="modal-body">
+    <p>Describe what you were expecting and what actually happened. A snapshot of the system state (Dab, Orchestrator, Agents) will be collected automatically.</p>
+    <textarea id="bug-description" rows="5" placeholder="Description of the problem..."></textarea>
+    <div id="bug-error" class="bug-error hidden"></div>
+    <div id="bug-success" class="bug-success hidden"></div>
+  </div>
+  <div class="modal-footer">
+    <button id="btn-bug-cancel" class="btn-secondary">Cancel</button>
+    <button id="btn-bug-submit" class="btn-primary">Submit Report</button>
+  </div>
+</div>
+
+<script src="/app.js" type="module"></script>
 </body>
 </html>

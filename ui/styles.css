@@ -735,5 +735,123 @@ body {
   border-color: rgba(63,185,80,0.3);
 }
 
+/* ── Bug Report Modal ────────────────────────────────────────────────────────── */
+.btn-report-issue {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-muted);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-report-issue:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+}
+
+.modal-backdrop {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+}
+.modal {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  width: 90%;
+  max-width: 500px;
+  z-index: 1001;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.modal-header h2 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-bottom: 16px;
+  color: var(--text-primary);
+}
+.modal-body p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+.modal-body textarea {
+  width: 100%;
+  background: var(--bg-base);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  resize: vertical;
+  margin-bottom: 16px;
+}
+.modal-body textarea:focus {
+  outline: none;
+  border-color: var(--color-act);
+}
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.btn-secondary, .btn-primary {
+  padding: 8px 16px;
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+}
+.btn-secondary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-muted);
+}
+.btn-secondary:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+.btn-primary {
+  background: var(--color-act);
+  color: #fff;
+}
+.btn-primary:hover {
+  background: #349b42;
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.bug-error, .bug-success {
+  font-size: 0.85rem;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 16px;
+}
+.bug-error {
+  background: var(--color-blocked-glow);
+  color: var(--color-blocked);
+  border: 1px solid var(--color-blocked);
+}
+.bug-success {
+  background: var(--color-act-glow);
+  color: var(--color-act);
+  border: 1px solid var(--color-act);
+}
+
 /* ── Utilities ─────────────────────────────────────────────────────────────── */
 .hidden { display: none !important; }

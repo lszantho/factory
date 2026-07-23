@@ -298,6 +298,86 @@ function handleStatic(res, urlPath) {
   res.end(body);
 }
 
+/** POST /api/bugreport/:repo — create a snapshot of the system state */
+function handleBugReport(req, res, repo) {
+  const config = loadConfig(repo);
+  if (!config) return error(res, 404, `Unknown repo: ${repo}`);
+
+  let body = '';
+  req.on('data', chunk => body += chunk.toString());
+  req.on('end', () => {
+    let payload;
+    try {
+      payload = JSON.parse(body);
+    } catch (err) {
+      return error(res, 400, 'Invalid JSON body');
+    }
+
+    try {
+      // 1. dab status
+      let dabStatus = null;
+      try {
+        const dabRaw = execFileSync(config.paths.node, [config.paths.dabEntry, 'status'], { cwd: config.repoDir, encoding: 'utf-8', timeout: 10_000 });
+        dabStatus = JSON.parse(dabRaw);
+      } catch (e) {
+        dabStatus = { error: String(e.message) };
+      }
+
+      // 2. orchestrator status
+      let orchStatus = null;
+      try {
+        const orchRaw = execFileSync(config.paths.node, [path.join(FACTORY_DIR, 'orchestrator.mjs'), repo, '--status', '--json'], { cwd: FACTORY_DIR, encoding: 'utf-8', timeout: 30_000 });
+        const jsonStart = orchRaw.indexOf('{');
+        orchStatus = jsonStart !== -1 ? JSON.parse(orchRaw.slice(jsonStart)) : { raw: orchRaw };
+      } catch (e) {
+        orchStatus = { error: String(e.message) };
+      }
+
+      // 3. claude agents
+      let claudeStatus = null;
+      try {
+        const claudeRaw = execFileSync('claude', ['agents', '--json'], { encoding: 'utf-8', timeout: 10_000 });
+        claudeStatus = JSON.parse(claudeRaw);
+      } catch (e) {
+        claudeStatus = { error: String(e.message) };
+      }
+
+      // 4. orchestrator state.json
+      let stateJson = null;
+      try {
+        const statePath = path.join(FACTORY_DIR, 'logs', `${repo}_state.json`);
+        if (fs.existsSync(statePath)) {
+          stateJson = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+        }
+      } catch (e) {
+        stateJson = { error: String(e.message) };
+      }
+
+      const report = {
+        timestamp: new Date().toISOString(),
+        repo,
+        description: payload.description,
+        uiState: payload.uiState,
+        system: {
+          dab: dabStatus,
+          orchestrator: orchStatus,
+          claude: claudeStatus,
+          state: stateJson
+        }
+      };
+
+      const reportDir = path.join(FACTORY_DIR, 'logs', 'bug_reports');
+      if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true });
+      const filename = `bug_report_${Date.now()}.json`;
+      fs.writeFileSync(path.join(reportDir, filename), JSON.stringify(report, null, 2), 'utf-8');
+
+      json(res, 200, { success: true, filename });
+    } catch (err) {
+      error(res, 500, String(err.message));
+    }
+  });
+}
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
 const server = http.createServer((req, res) => {
@@ -332,6 +412,11 @@ const server = http.createServer((req, res) => {
   const autopilotMatch = pathname.match(/^\/api\/autopilot\/([^/]+)$/);
   if (autopilotMatch && method === 'GET') {
     return handleAutopilot(res, autopilotMatch[1]);
+  }
+
+  const bugReportMatch = pathname.match(/^\/api\/bugreport\/([^/]+)$/);
+  if (bugReportMatch && method === 'POST') {
+    return handleBugReport(req, res, bugReportMatch[1]);
   }
 
   // Static files (dashboard)
