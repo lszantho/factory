@@ -155,18 +155,20 @@ function renderVerdict(status) {
   const hasSessionRunning = !!runningTask;
   const inCooldown = lastTickCompletedAt && (Date.now() - lastTickCompletedAt < POST_TICK_COOLDOWN_MS);
   const isActable = marker === 'act';
-  const btnDisabled = !isActable || tickRunning || autopilotInfo.scheduled || hasSessionRunning || inCooldown;
+  // If the orchestrator says it's actionable, we MUST allow the tick, even if a session is running
+  // (e.g., WIP limit > 1 allows starting a new task, or a reviewer needs dispatching).
+  const btnDisabled = !isActable || tickRunning || autopilotInfo.scheduled || inCooldown;
 
   let btnText = 'Run next tick';
-  if (tickRunning)             btnText = 'Running tick...';
-  else if (hasSessionRunning)  btnText = `${runningTask.lastRole ?? 'Agent'} running in background...`;
-  else if (inCooldown)         btnText = 'Agent starting up...';
+  if (tickRunning)                                    btnText = 'Running tick...';
+  else if (inCooldown)                                btnText = 'Agent starting up...';
+  else if (hasSessionRunning && marker !== 'act')     btnText = `${runningTask.lastRole ?? 'Agent'} running in background...`;
 
   let btnTitle = 'Run node orchestrator.mjs ' + (currentRepo ?? '');
-  if (tickRunning)             btnTitle = 'A tick is already running';
-  else if (autopilotInfo.scheduled) btnTitle = `Autopilot is active (launchd runs every ${Math.round((autopilotInfo.intervalSeconds ?? 900) / 60)}m)`;
-  else if (hasSessionRunning)  btnTitle = `An agent session (${runningTask.lastRole ?? 'agent'}) is currently running in background`;
-  else if (inCooldown)         btnTitle = 'Waiting for agent process to initialize...';
+  if (tickRunning)                                    btnTitle = 'A tick is already running';
+  else if (autopilotInfo.scheduled)                   btnTitle = `Autopilot is active (launchd runs every ${Math.round((autopilotInfo.intervalSeconds ?? 900) / 60)}m)`;
+  else if (inCooldown)                                btnTitle = 'Waiting for agent process to initialize...';
+  else if (hasSessionRunning && marker !== 'act')     btnTitle = `An agent session (${runningTask.lastRole ?? 'agent'}) is currently running in background`;
   else if (marker === 'wait')  btnTitle = `Wait: ${nt.description}`;
   else if (marker === 'blocked') btnTitle = `Blocked: ${nt.description}`;
 

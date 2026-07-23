@@ -415,11 +415,15 @@ function inFlightAction(config, taskId, task, titleHint) {
     // review; don't count a new rejection. (Without this the PR would sit at CHANGES_REQUESTED
     // forever — GitHub doesn't clear it on push without branch protection — and never re-review.)
     if (head !== task.reviewedSha) {
+      const sessionName = `factory-reviewer-${taskId}-${shortHead}`;
+      if (hasRunningSession(config, sessionName)) {
+        return { action: 'wait', reason: 'session-running', taskId };
+      }
       return {
         action: 'dispatch',
         role: 'reviewer',
         taskId,
-        sessionName: `factory-reviewer-${taskId}-${shortHead}`,
+        sessionName,
         reason: 're-review',
         prompt: `PR #${pr.number} for task "${titleHint ?? taskId}" was updated after a changes-requested review. Re-review the current state per your role instructions via \`gh pr diff ${pr.number}\` / \`gh pr view ${pr.number}\`.`,
         onDispatched: () => { task.reviewedSha = head; }
@@ -433,13 +437,18 @@ function inFlightAction(config, taskId, task, titleHint) {
     const rounds = (task.rejectionCount ?? 0) + (alreadyCounted ? 0 : 1);
     const tag = latestRejectionTag(config, pr.number);
     const toArchitect = rounds >= 2 || tag === 'architectural';
+    const role = toArchitect ? 'architect' : 'developer';
+    const sessionName = `factory-${toArchitect ? 'architect-mediate' : 'developer'}-${taskId}-${shortHead}`;
+    if (hasRunningSession(config, sessionName)) {
+      return { action: 'wait', reason: 'session-running', taskId };
+    }
     return {
       action: 'dispatch',
-      role: toArchitect ? 'architect' : 'developer',
+      role,
       taskId,
       // SHA-suffixed so a just-finished session of the previous round (whose transcript is still
       // <staleMinutes old) can't false-positive hasRunningSession and skip this dispatch.
-      sessionName: `factory-${toArchitect ? 'architect-mediate' : 'developer'}-${taskId}-${shortHead}`,
+      sessionName,
       // --worktree, NOT --from-pr. `--from-pr` resumes a session associated with the PR, but once
       // several sessions touch a PR (original dev + reviewer + prior feedback rounds) it can't pick
       // one and falls back to an interactive picker that hangs forever in --bg (no TTY) — observed
@@ -456,11 +465,15 @@ function inFlightAction(config, taskId, task, titleHint) {
   }
 
   if (!pr.reviewDecision && isCiGreen(pr)) {
+    const sessionName = `factory-reviewer-${taskId}-${shortHead}`;
+    if (hasRunningSession(config, sessionName)) {
+      return { action: 'wait', reason: 'session-running', taskId };
+    }
     return {
       action: 'dispatch',
       role: 'reviewer',
       taskId,
-      sessionName: `factory-reviewer-${taskId}-${shortHead}`,
+      sessionName,
       // No --from-pr here: it resumes a session already associated with the PR, but the
       // reviewer's first look at any given PR has no such session to resume — it was observed
       // falling back to an interactive picker (per --help: "...or open interactive picker"),
@@ -640,7 +653,7 @@ function renderStatus(config) {
     const task = state.tasks[taskId];
     if (!task.branch) { out.push(`  ${taskId} — no branch yet`); continue; }
     const sessionName = `factory-${task.lastRole ?? 'developer'}-${taskId}`;
-    const running = hasRunningSession(config, sessionName);
+    const running = inFlightAction(config, taskId, task, taskId).reason === 'session-running';
     const pr = findPrForBranch(config, task.branch);
     const prStr = pr ? `PR #${pr.number} ${pr.state}  CI:${ciLabel(pr)}  review:${pr.reviewDecision || '—'}` : 'no PR yet';
     out.push(`  ${taskId}`);
@@ -684,8 +697,7 @@ function renderStatusJson(config) {
   const tasks = {};
   for (const taskId of Object.keys(state.tasks).sort()) {
     const task = state.tasks[taskId];
-    const sessionName = `factory-${task.lastRole ?? 'developer'}-${taskId}`;
-    const running = task.branch ? hasRunningSession(config, sessionName) : false;
+    const running = task.branch ? inFlightAction(config, taskId, task, taskId).reason === 'session-running' : false;
     const pr = task.branch ? findPrForBranch(config, task.branch) : null;
     tasks[taskId] = {
       branch: task.branch ?? null,
