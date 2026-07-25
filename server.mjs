@@ -223,6 +223,77 @@ function handleTick(req, res, repo) {
 }
 
 /**
+ * GET /api/agents/:repo — this repo's own factory-dispatched processes, live from
+ * `claude agents --json` via `orchestrator.mjs --agents`. Powers the Processes view.
+ */
+function handleAgents(res, repo) {
+  const config = loadConfig(repo);
+  if (!config) return error(res, 404, `Unknown repo: ${repo}`);
+  try {
+    const raw = execFileSync(config.paths.node, [
+      path.join(FACTORY_DIR, 'orchestrator.mjs'), repo, '--agents', '--json'
+    ], { cwd: FACTORY_DIR, encoding: 'utf-8', timeout: 30_000 });
+    json(res, 200, JSON.parse(raw));
+  } catch (err) {
+    error(res, 500, String(err.message ?? err));
+  }
+}
+
+/**
+ * POST /api/kill/:repo — terminate a stuck session's process(es). Body: either { taskId } (kill
+ * via a factory-tracked task — the in-flight-tasks card's kill button) or { sessionId } (kill an
+ * agents-tracked session directly, tracked task or not — the Processes view's kill button, the
+ * only path that can reach an orphan whose dispatching task no longer exists to look it up
+ * through). Exactly one of the two, not both. The orchestrator is the only place the actual
+ * lookup/kill/audit logic lives — this handler just shells out and relays its JSON result.
+ */
+function handleKill(req, res, repo) {
+  const config = loadConfig(repo);
+  if (!config) return error(res, 404, `Unknown repo: ${repo}`);
+
+  let body = '';
+  req.on('data', (chunk) => { body += chunk.toString(); });
+  req.on('end', () => {
+    let payload;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      return error(res, 400, 'Invalid JSON body');
+    }
+    const { taskId, sessionId } = payload;
+    let killFlag;
+    if (taskId && typeof taskId === 'string') {
+      killFlag = `--kill-session=${taskId}`;
+    } else if (sessionId && typeof sessionId === 'string') {
+      killFlag = `--kill-agent=${sessionId}`;
+    } else {
+      return error(res, 400, 'Provide exactly one of taskId or sessionId');
+    }
+
+    try {
+      const raw = execFileSync(config.paths.node, [
+        path.join(FACTORY_DIR, 'orchestrator.mjs'), repo, killFlag, '--source=ui', '--json'
+      ], { cwd: FACTORY_DIR, encoding: 'utf-8', timeout: 30_000 });
+      // The kill actions print the audit-log line first (logDecision's own console.log), then
+      // their own result line last — the result is always the final line, not the first `{`.
+      const lines = raw.trim().split('\n').filter(Boolean);
+      const result = JSON.parse(lines[lines.length - 1]);
+      json(res, result.ok ? 200 : 500, result);
+    } catch (err) {
+      // A non-zero exit (set when a target pid failed to die) makes execFileSync throw, but its
+      // stdout — including the result line — is still on the error.
+      const out = err.stdout ? String(err.stdout).trim().split('\n').filter(Boolean) : [];
+      if (out.length > 0) {
+        try {
+          return json(res, 500, JSON.parse(out[out.length - 1]));
+        } catch { /* fall through to generic error below */ }
+      }
+      error(res, 500, String(err.message ?? err));
+    }
+  });
+}
+
+/**
  * GET /api/autopilot/:repo — check whether a launchd schedule is loaded for this repo.
  * Convention: label = com.<user>.<repo>-factory, plist in ~/Library/LaunchAgents/.
  * Returns { scheduled, label, intervalSeconds, plistPath, nextRunEta }.
@@ -412,6 +483,16 @@ const server = http.createServer((req, res) => {
   const autopilotMatch = pathname.match(/^\/api\/autopilot\/([^/]+)$/);
   if (autopilotMatch && method === 'GET') {
     return handleAutopilot(res, autopilotMatch[1]);
+  }
+
+  const killMatch = pathname.match(/^\/api\/kill\/([^/]+)$/);
+  if (killMatch && method === 'POST') {
+    return handleKill(req, res, killMatch[1]);
+  }
+
+  const agentsMatch = pathname.match(/^\/api\/agents\/([^/]+)$/);
+  if (agentsMatch && method === 'GET') {
+    return handleAgents(res, agentsMatch[1]);
   }
 
   const bugReportMatch = pathname.match(/^\/api\/bugreport\/([^/]+)$/);

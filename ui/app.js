@@ -24,9 +24,13 @@ const $ = (id) => document.getElementById(id);
 const repoSelect          = $('repo-select');
 const viewSingle          = $('view-single');
 const viewPortfolio       = $('view-portfolio');
+const viewProcesses       = $('view-processes');
 const singleRepoView      = $('single-repo-view');
 const portfolioView       = $('portfolio-view');
 const portfolioGrid       = $('portfolio-grid');
+const processesView       = $('processes-view');
+const processesRegion     = $('processes-region');
+const processesCount      = $('processes-count');
 const pollDot             = $('poll-dot');
 const pollLabel           = $('poll-label');
 const autopilotBadge      = $('autopilot-badge');
@@ -117,6 +121,7 @@ function typeIcon(type) {
     idle:             '💤',
     'skipped-dispatch': '⏭',
     error:            '🔴',
+    'manual-kill':    '🛑',
   };
   return map[type] ?? '•';
 }
@@ -132,6 +137,7 @@ function typeColor(type) {
     idle:             'var(--type-idle)',
     'skipped-dispatch': 'var(--type-wait)',
     error:            'var(--type-blocked)',
+    'manual-kill':    'var(--type-blocked)',
   };
   return map[type] ?? 'var(--text-muted)';
 }
@@ -256,6 +262,17 @@ function renderTasks(status) {
     const roleClass = `pill-role-${role}`;
     const sessionClass = t.sessionRunning ? 'pill-session-running' : 'pill-session-idle';
     const sessionLabel = t.sessionRunning ? 'session running' : 'session idle';
+    // A stuck session is invisible to sessionRunning (its transcript is silent either way — a
+    // paused agent and a wedged one look identical there); `stuck` comes from a live
+    // `claude agents --json` check for a session waiting on an interactive prompt it has no TTY
+    // to answer (confirmed cause: hitting Claude's own usage limit). See orchestrator.mjs's
+    // findStuckSession for the full story.
+    const stuckPillHtml = t.stuck
+      ? `<span class="pill pill-stuck" title="Stuck: waiting for &quot;${escHtml(t.stuck.waitingFor)}&quot; — this session cannot proceed on its own">🛑 stuck</span>`
+      : '';
+    const killButtonHtml = t.stuck
+      ? `<button class="btn-kill" data-kill-task="${escHtml(taskId)}" title="Terminate the stuck process and audit-log the action">🛑 Kill stuck process</button>`
+      : '';
     const pr = t.pr;
     const prHref = pr
       ? `https://github.com/${status.repo === 'leanmacrofeed' ? 'lszantho/lean-macro-feed' : currentRepo}/pull/${pr.number}`
@@ -288,6 +305,7 @@ function renderTasks(status) {
           <div class="task-pills">
             <span class="pill ${roleClass}">${escHtml(role)}</span>
             <span class="pill ${sessionClass}">${sessionLabel}</span>
+            ${stuckPillHtml}
           </div>
         </div>
         <div class="task-card-body">
@@ -301,9 +319,50 @@ function renderTasks(status) {
             <div class="task-meta-value" title="${escHtml(t.branch)}">${escHtml(t.branch?.replace('worktree-', '') ?? '—')}</div>
           </div>
         </div>
+        ${killButtonHtml ? `<div class="task-card-footer">${killButtonHtml}</div>` : ''}
       </div>
     `;
   }).join('');
+
+  tasksRegion.querySelectorAll('[data-kill-task]').forEach((btn) => {
+    btn.addEventListener('click', () => killStuckSession(btn.getAttribute('data-kill-task'), btn));
+  });
+}
+
+// ── Kill stuck session ───────────────────────────────────────────────────────
+
+async function killStuckSession(taskId, btn) {
+  if (!currentRepo) return;
+  const confirmed = confirm(
+    `Kill the stuck process for "${taskId}"?\n\n` +
+    `This session is waiting on an interactive prompt it can't answer (usually Claude's own ` +
+    `usage limit) and cannot make progress on its own. Terminating it is logged to the audit ` +
+    `timeline. A later tick will retry the task fresh.`
+  );
+  if (!confirmed) return;
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Killing...';
+  }
+
+  try {
+    const res = await fetch(`/api/kill/${currentRepo}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId }),
+    });
+    const result = await res.json();
+    if (!res.ok || !result.ok) {
+      throw new Error(result.error || `HTTP ${res.status}`);
+    }
+  } catch (err) {
+    alert(`Failed to kill session: ${err.message}`);
+  } finally {
+    // Refresh immediately rather than waiting for the next poll — the task card should stop
+    // showing "stuck" (or, on failure, at least reflect current reality) right away.
+    await fetchStatus();
+  }
 }
 
 function enrichTimelineDurations(entries) {
@@ -397,6 +456,11 @@ function buildTimelineDesc(e) {
         : 'Idle — nothing queued';
     case 'error':
       return `Error — ${escHtml(e.message ?? e.reason ?? '')}`;
+    case 'manual-kill': {
+      const outcome = e.killed?.length ? `killed pid${e.killed.length > 1 ? 's' : ''} ${e.killed.join(', ')}` : 'nothing to kill (already gone)';
+      const via = e.source === 'ui' ? ' via dashboard' : '';
+      return `Killed stuck session${via} — ${escHtml(outcome)}`;
+    }
     default:
       return escHtml(e.type);
   }
@@ -457,7 +521,10 @@ async function fetchStatus() {
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  const pollFn = () => (viewMode === 'portfolio' ? fetchPortfolio() : fetchStatus());
+  const pollFn = () =>
+    viewMode === 'portfolio' ? fetchPortfolio() :
+    viewMode === 'processes' ? fetchAgents() :
+    fetchStatus();
   pollFn();
   pollTimer = setInterval(pollFn, POLL_INTERVAL_MS);
 }
@@ -657,28 +724,132 @@ function renderPortfolio(cards) {
   }).join('');
 }
 
+// ── Processes View ────────────────────────────────────────────────────────────
+// Live from `claude agents --json`, filtered server-side (orchestrator.mjs's listAgentProcesses)
+// to this repo's own factory-dispatched sessions — the underlying command is global to every
+// Claude Code session on the machine, so that filtering is what keeps this view meaningful rather
+// than a list of unrelated work a click could accidentally kill.
+
+async function fetchAgents() {
+  if (!currentRepo) return;
+  pollDot.classList.add('active');
+  try {
+    const res = await fetch(`/api/agents/${currentRepo}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    disconnectedBanner.classList.remove('visible');
+    pollLabel.textContent = `updated ${shortTime(new Date().toISOString())}`;
+    renderProcesses(data.agents ?? []);
+  } catch (err) {
+    console.error('Agents poll failed:', err);
+    disconnectedBanner.classList.add('visible');
+    pollLabel.textContent = 'disconnected';
+  } finally {
+    setTimeout(() => pollDot.classList.remove('active'), 400);
+  }
+}
+
+function renderProcesses(agents) {
+  processesCount.textContent = agents.length;
+
+  if (agents.length === 0) {
+    processesRegion.innerHTML = '<div class="tasks-empty">No factory processes currently running for this repo.</div>';
+    return;
+  }
+
+  processesRegion.innerHTML = `
+    <table class="processes-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Started</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${agents.map((a) => {
+          const stuckClass = a.stuck ? ' stuck' : '';
+          const statusHtml = a.stuck
+            ? `<span class="pill pill-stuck" title="Stuck: waiting for &quot;${escHtml(a.stuck.waitingFor)}&quot; — this session cannot proceed on its own">🛑 stuck (${escHtml(a.stuck.waitingFor)})</span>`
+            : `<span class="pill pill-session-running">${escHtml(a.status ?? '—')}</span>`;
+          const killHtml = a.stuck
+            ? `<button class="btn-kill" data-kill-agent-session="${escHtml(a.sessionId)}" title="Terminate the stuck process and audit-log the action">🛑 Kill</button>`
+            : '';
+          return `
+            <tr class="processes-row${stuckClass}">
+              <td class="processes-name" title="${escHtml(a.sessionId)}${a.pid ? ' · pid ' + a.pid : ''}">${escHtml(a.name)}</td>
+              <td class="processes-time" title="${escHtml(a.startedAt ?? '')}">${relativeTime(a.startedAt)}</td>
+              <td>${statusHtml}</td>
+              <td class="processes-actions">${killHtml}</td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+
+  processesRegion.querySelectorAll('[data-kill-agent-session]').forEach((btn) => {
+    btn.addEventListener('click', () => killAgentSession(btn.getAttribute('data-kill-agent-session'), btn));
+  });
+}
+
+async function killAgentSession(sessionId, btn) {
+  if (!currentRepo) return;
+  const confirmed = confirm(
+    `Kill this stuck process?\n\n` +
+    `Session ${sessionId} is waiting on an interactive prompt it can't answer (usually Claude's ` +
+    `own usage limit) and cannot make progress on its own. Terminating it is logged to the audit ` +
+    `timeline in Repo View.`
+  );
+  if (!confirmed) return;
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Killing...';
+  }
+
+  try {
+    const res = await fetch(`/api/kill/${currentRepo}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+    const result = await res.json();
+    if (!res.ok || !result.ok) {
+      throw new Error(result.error || `HTTP ${res.status}`);
+    }
+  } catch (err) {
+    alert(`Failed to kill session: ${err.message}`);
+  } finally {
+    await fetchAgents();
+  }
+}
+
 function setViewMode(mode) {
   viewMode = mode;
   localStorage.setItem('factory.viewMode', mode);
-  if (mode === 'portfolio') {
-    viewSingle.classList.remove('active');
-    viewPortfolio.classList.add('active');
-    singleRepoView.classList.add('hidden');
-    portfolioView.classList.remove('hidden');
-    repoSelect.classList.add('hidden');
-    fetchPortfolio();
-  } else {
-    viewPortfolio.classList.remove('active');
-    viewSingle.classList.add('active');
-    portfolioView.classList.add('hidden');
-    singleRepoView.classList.remove('hidden');
-    repoSelect.classList.remove('hidden');
-    fetchStatus();
-  }
+
+  viewSingle.classList.toggle('active', mode === 'single');
+  viewPortfolio.classList.toggle('active', mode === 'portfolio');
+  viewProcesses.classList.toggle('active', mode === 'processes');
+
+  singleRepoView.classList.toggle('hidden', mode !== 'single');
+  portfolioView.classList.toggle('hidden', mode !== 'portfolio');
+  processesView.classList.toggle('hidden', mode !== 'processes');
+
+  // The repo selector is meaningless in portfolio view (it spans every configured repo at once)
+  // but still applies to processes view (it's scoped to one repo, same as single view).
+  repoSelect.classList.toggle('hidden', mode === 'portfolio');
+
+  if (mode === 'portfolio')       fetchPortfolio();
+  else if (mode === 'processes')  fetchAgents();
+  else                             fetchStatus();
 }
 
 viewSingle.addEventListener('click', () => setViewMode('single'));
 viewPortfolio.addEventListener('click', () => setViewMode('portfolio'));
+viewProcesses.addEventListener('click', () => setViewMode('processes'));
 
 // ── Bug Report Modal ────────────────────────────────────────────────────────────
 

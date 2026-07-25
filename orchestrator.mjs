@@ -38,6 +38,26 @@ const STATUS_ONLY = CLI_FLAGS.includes('--status') || WATCH_FLAG != null;
 // --json (only meaningful alongside --status) emits structured JSON instead of human text.
 // Used by the local UI server; ignored during --watch (interactive terminal only).
 const JSON_FLAG = CLI_FLAGS.includes('--json');
+// --kill-session=<taskId> terminates a stuck session's process(es) and audit-logs the action —
+// the manual-recovery runbook for the usage-limit-dialog hang, made self-service via the UI's
+// kill button (server.mjs shells out to this) instead of a human hand-matching pids. Does not
+// touch state.tasks or attempt to redispatch: recovery from here on is the existing
+// stale-session retry path on a subsequent ordinary tick, same as any other session that died
+// without opening a PR.
+const KILL_SESSION_FLAG = CLI_FLAGS.find((f) => f.startsWith('--kill-session='));
+const KILL_SESSION_TASK_ID = KILL_SESSION_FLAG ? KILL_SESSION_FLAG.split('=').slice(1).join('=') : null;
+// --kill-agent=<sessionId> is the direct-by-session counterpart, for the processes view: it kills
+// any agents-tracked session by id with no requirement that a factory task track it (the case for
+// an already-orphaned process whose dispatching task completed some other way).
+const KILL_AGENT_FLAG = CLI_FLAGS.find((f) => f.startsWith('--kill-agent='));
+const KILL_AGENT_SESSION_ID = KILL_AGENT_FLAG ? KILL_AGENT_FLAG.split('=').slice(1).join('=') : null;
+// --source=<ui|cli> is audit metadata only — who initiated the kill. Defaults to 'cli' (a human
+// running the command directly); server.mjs passes --source=ui for the dashboard's kill button.
+const SOURCE_FLAG = CLI_FLAGS.find((f) => f.startsWith('--source='));
+const KILL_SOURCE = SOURCE_FLAG ? SOURCE_FLAG.split('=')[1] : 'cli';
+// --agents (with --json) lists this repo's own factory-dispatched processes, live from `claude
+// agents --json` — the processes view's data source. Read-only, same spirit as --status.
+const AGENTS_FLAG = CLI_FLAGS.includes('--agents');
 
 const CONFIG_PATH = path.join(FACTORY_DIR, 'configs', `${repoConfigName}.json`);
 const STATE_PATH = path.join(FACTORY_DIR, 'state', `${repoConfigName}.json`);
@@ -163,6 +183,35 @@ function claudeAgentsJson(config) {
   } catch {
     return [];
   }
+}
+
+// A session stuck on an interactive prompt it has no TTY to answer (confirmed cause: hitting
+// Claude's own usage limit and dropping into `/rate-limit-options`, see factory's operational
+// gotchas doc) is invisible to the transcript-mtime liveness check above by design — the
+// transcript IS silent, same as a session that's just thinking. `claude agents --json` is the one
+// source that distinguishes them: a still-tracked live session reports `status`/`waitingFor`
+// (e.g. "dialog open"); a session with no live process left reports neither. Call sites pass in
+// the already-fetched agents list rather than each spawning their own `claude agents` subprocess.
+function findStuckSession(agents, sessionId) {
+  const entry = agents.find((s) => s.sessionId === sessionId);
+  if (!entry || !entry.waitingFor) return null;
+  return { pid: entry.pid ?? null, status: entry.status ?? null, waitingFor: entry.waitingFor, name: entry.name ?? null };
+}
+
+// The pid `claude agents --json` reports is the inner `--bg-spare` worker; the process actually
+// holding the pty/session (and blocking on the stuck dialog) is its parent, a `--bg-pty-host`
+// wrapper — confirmed by inspecting a live stuck session's process tree. Killing only the child
+// leaves the pty-host orphaned, still holding its socket. Returns both pids (ppid may be null if
+// the process already exited between the `agents --json` snapshot and this call).
+function resolveKillTargets(pid) {
+  if (!pid) return [];
+  let ppid = null;
+  try {
+    ppid = Number(execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], { encoding: 'utf-8' }).trim()) || null;
+  } catch {
+    // Process already gone by the time we looked — nothing to resolve, pid alone is still tried.
+  }
+  return ppid ? [pid, ppid] : [pid];
 }
 
 // Every background session appends to a live transcript at
@@ -694,11 +743,16 @@ function renderStatusJson(config) {
   const sync = authOk ? syncTargetRepo(config) : { ok: false, error: 'gh not authenticated' };
   const budget = budgetStatus(state, config);
 
+  // Fetched once and reused across every task below (each of which already shells out to `gh`
+  // separately for its own PR lookup) rather than one `claude agents` subprocess per task.
+  const agents = claudeAgentsJson(config);
+
   const tasks = {};
   for (const taskId of Object.keys(state.tasks).sort()) {
     const task = state.tasks[taskId];
     const running = task.branch ? inFlightAction(config, taskId, task, taskId).reason === 'session-running' : false;
     const pr = task.branch ? findPrForBranch(config, task.branch) : null;
+    const stuck = task.sessionId ? findStuckSession(agents, task.sessionId) : null;
     tasks[taskId] = {
       branch: task.branch ?? null,
       lastRole: task.lastRole ?? null,
@@ -706,6 +760,7 @@ function renderStatusJson(config) {
       sessionRunning: running,
       sessionId: task.sessionId ?? null,
       lastDispatchedAt: task.lastDispatchedAt ? new Date(task.lastDispatchedAt).toISOString() : null,
+      stuck: stuck ? { pid: stuck.pid, waitingFor: stuck.waitingFor } : null,
       pr: pr ? {
         number: pr.number,
         state: pr.state,
@@ -771,6 +826,118 @@ function statusMain() {
   } else {
     console.log(renderStatus(config));
   }
+}
+
+// Manual recovery for a session stuck on an interactive dialog it has no TTY to answer (see
+// findStuckSession's comment). Prints a single JSON result line to stdout — server.mjs parses
+// this directly rather than re-implementing any of the lookup/kill logic, keeping the
+// orchestrator the one place this behavior is defined.
+// Shared by both kill entry points below. Only ever terminates a session `claude agents --json`
+// itself reports as waiting on a prompt — never a bare "kill whatever this sessionId points at" —
+// so a request against a legitimately busy session (confirmed to happen: the daemon can silently
+// resume a killed session's *logical* id onto a fresh pid) is a safe no-op, not a foot-gun.
+// taskId is optional (present when called via the tracked-task path, null for an untracked
+// process killed directly from the processes view) — audit-log correlation only, never a lookup key.
+function killSessionCore(config, sessionId, source, taskId = null) {
+  const decisionId = randomUUID();
+  const agents = claudeAgentsJson(config);
+  const stuck = findStuckSession(agents, sessionId);
+  const targets = resolveKillTargets(stuck?.pid);
+
+  const killed = [];
+  const errors = [];
+  for (const pid of targets) {
+    try {
+      process.kill(pid, 'SIGTERM');
+      killed.push(pid);
+    } catch (err) {
+      // ESRCH ("no such process") means it was already gone — not a failure of this action,
+      // the end state (dead) is exactly what was wanted.
+      if (err.code !== 'ESRCH') errors.push({ pid, error: err.message });
+    }
+  }
+
+  logDecision({
+    decisionId,
+    type: 'manual-kill',
+    taskId,
+    sessionId,
+    source: source ?? 'cli',
+    waitingFor: stuck?.waitingFor ?? null,
+    pids: targets,
+    killed,
+    errors: errors.length ? errors : undefined,
+  });
+
+  const result = { ok: errors.length === 0, taskId, sessionId, pids: targets, killed, errors };
+  console.log(JSON.stringify(result));
+  if (errors.length > 0) process.exitCode = 1;
+}
+
+function killSessionMain(taskId, source) {
+  const config = loadConfig();
+  const state = loadState();
+  const task = state.tasks[taskId];
+
+  if (!task) {
+    console.log(JSON.stringify({ ok: false, taskId, error: 'no such tracked task' }));
+    process.exitCode = 1;
+    return;
+  }
+  if (!task.sessionId) {
+    console.log(JSON.stringify({ ok: false, taskId, error: 'task has no recorded session' }));
+    process.exitCode = 1;
+    return;
+  }
+
+  killSessionCore(config, task.sessionId, source, taskId);
+}
+
+// Direct-by-session counterpart for the processes view: kills any agents-tracked session by its
+// sessionId, with no requirement that a factory task track it — exactly the case for an orphaned
+// process (its dispatching task already completed some other way, e.g. a prior manual retry) that
+// the per-task path above can't reach at all, since there's no task left to look it up through.
+function killAgentMain(sessionId, source) {
+  const config = loadConfig();
+  killSessionCore(config, sessionId, source, null);
+}
+
+function agentsMain() {
+  const config = loadConfig();
+  console.log(JSON.stringify({ agents: listAgentProcesses(config) }));
+}
+
+// Repo-scoped read for the processes view: `claude agents --json` is global to the whole machine
+// (every Claude Code session, this very one included) — filtering to this factory's own dispatch
+// naming convention (`factory-<role>-...`) plus a cwd under this repo's checkout is what keeps the
+// view from becoming a list of unrelated work a click could accidentally kill.
+//
+// Liveness signal: NOT `pid` — confirmed by inspecting real entries, a session from five days ago
+// with no live process left still carries its last-known pid in the daemon's historical record,
+// so pid presence alone doesn't mean "currently running." `status` is the reliable signal: a
+// genuinely tracked-live session reports "waiting" (stuck on a prompt) or "busy" (working); a
+// cleanly-finished session still gets a status, "idle"; a pure historical record with no live
+// process left has no status field at all. Filtering to status present and not "idle" is what
+// keeps this to sessions actually worth showing in a *processes* view.
+function listAgentProcesses(config) {
+  const agents = claudeAgentsJson(config);
+  return agents
+    .filter((s) =>
+      s.kind === 'background' &&
+      typeof s.name === 'string' && s.name.startsWith('factory-') &&
+      typeof s.cwd === 'string' && s.cwd.startsWith(config.repoDir) &&
+      s.status != null && s.status !== 'idle'
+    )
+    .map((s) => ({
+      name: s.name,
+      sessionId: s.sessionId,
+      pid: s.pid ?? null,
+      startedAt: s.startedAt ? new Date(s.startedAt).toISOString() : null,
+      status: s.status ?? null,
+      state: s.state ?? null,
+      stuck: s.waitingFor ? { waitingFor: s.waitingFor } : null,
+    }))
+    .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''));
 }
 
 function main() {
@@ -914,6 +1081,9 @@ function main() {
 }
 
 if (IS_MAIN) {
-  if (STATUS_ONLY) statusMain();
+  if (KILL_SESSION_TASK_ID) killSessionMain(KILL_SESSION_TASK_ID, KILL_SOURCE);
+  else if (KILL_AGENT_SESSION_ID) killAgentMain(KILL_AGENT_SESSION_ID, KILL_SOURCE);
+  else if (AGENTS_FLAG) agentsMain();
+  else if (STATUS_ONLY) statusMain();
   else main();
 }

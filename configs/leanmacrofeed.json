@@ -4,7 +4,7 @@
   "dryRun": false,
   "autoMerge": true,
   "maxConcurrentTasks": 1,
-  "stopAfterTask": "remove_legacy_hardcoded_fetcher_and_sweep_logic",
+  "stopAfterTask": "production_sign_off_for_registry_pipeline",
   "disallowedTools": [
     "Bash(gh pr merge*)",
     "Bash(git push --force*)",

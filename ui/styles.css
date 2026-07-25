@@ -412,11 +412,48 @@ body {
 .pill-role-reviewer  { color: var(--role-reviewer);  border-color: rgba(210,168,255,0.35); background: rgba(210,168,255,0.08); }
 .pill-session-running { color: var(--color-act); border-color: rgba(63,185,80,0.35); background: rgba(63,185,80,0.08); }
 .pill-session-idle    { color: var(--text-muted); border-color: var(--border-subtle); background: transparent; }
+.pill-stuck {
+  color: var(--color-blocked);
+  border-color: rgba(248,81,73,0.4);
+  background: rgba(248,81,73,0.1);
+  animation: pulse-stuck 1.6s ease-in-out infinite;
+}
+@keyframes pulse-stuck {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.6; }
+}
+
+/* Kill-stuck-session button — deliberately styled as a warning action, distinct from btn-tick's
+   affirmative green, so it never reads as "the normal next step." */
+.btn-kill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(248,81,73,0.4);
+  background: rgba(248,81,73,0.08);
+  color: var(--color-blocked);
+  font-family: var(--font-sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.btn-kill:hover:not(:disabled) { background: rgba(248,81,73,0.2); }
+.btn-kill:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .task-card-body {
   display: flex;
   flex-wrap: wrap;
   gap: 18px;
+}
+.task-card-footer {
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: flex-end;
 }
 .task-meta-item {
   display: flex;
@@ -610,6 +647,66 @@ body {
   background: var(--bg-surface);
   color: var(--text-primary);
   box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+/* ── Processes View ────────────────────────────────────────────────────────── */
+.processes-hint {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin: -4px 0 14px;
+  max-width: 72ch;
+  line-height: 1.5;
+}
+.processes-hint code {
+  font-family: var(--font-mono);
+  background: var(--bg-elevated);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+.processes-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-glass);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  font-size: 0.83rem;
+}
+.processes-table thead th {
+  text-align: left;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.processes-row td {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+.processes-row:last-child td { border-bottom: none; }
+.processes-row.stuck {
+  background: rgba(248,81,73,0.06);
+}
+.processes-name {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.processes-time {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.processes-actions {
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* ── Portfolio Grid & Cards ────────────────────────────────────────────────── */

@@ -22,6 +22,7 @@
       <div class="view-switch">
         <button id="view-single" class="view-btn active">Repo View</button>
         <button id="view-portfolio" class="view-btn">Portfolio View</button>
+        <button id="view-processes" class="view-btn">Processes</button>
       </div>
       <button id="btn-report-issue" class="btn-report-issue" title="Report a bug and snapshot the system state">Report Issue</button>
       <div class="header-spacer"></div>
@@ -99,6 +100,22 @@
         <span class="section-title">Cross-Repo Portfolio Overview</span>
       </div>
       <div id="portfolio-grid" class="portfolio-grid">
+        <div class="skeleton skeleton-task"></div>
+      </div>
+    </div>
+
+    <!-- ── Processes View ──────────────────────────────────────────────── -->
+    <div id="processes-view" class="hidden">
+      <div class="section-header">
+        <span class="section-title">This repo's factory processes</span>
+        <span id="processes-count" class="section-count">—</span>
+      </div>
+      <p class="processes-hint">
+        Live from <code>claude agents --json</code>, filtered to this repo's own factory-dispatched
+        sessions. A session stuck on a prompt it has no TTY to answer (usually Claude's own usage
+        limit) is highlighted and killable — everything else here is working normally.
+      </p>
+      <div id="processes-region" aria-label="Factory processes">
         <div class="skeleton skeleton-task"></div>
       </div>
     </div>
