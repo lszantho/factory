@@ -705,18 +705,24 @@ function renderPortfolio(cards) {
       </div>
     ` : '';
 
+    // c.progress is null when there's no active sprint, or its WORK_PLAN.md couldn't be read —
+    // both are "nothing to show a fraction for", not "0/0 done".
+    const progressBar = c.progress ? `
+      <div class="portfolio-progress-bar">
+        <div class="portfolio-progress-track">
+          <div class="portfolio-progress-fill" style="width:${c.progress.total > 0 ? Math.round((c.progress.done / c.progress.total) * 100) : 0}%"></div>
+        </div>
+        <span>${c.progress.done}/${c.progress.total} done</span>
+      </div>
+    ` : '';
+
     return `
       <div class="portfolio-card">
         <div class="portfolio-card-header">
           <div class="portfolio-repo-name">${escHtml(c.repo)}</div>
           <div class="portfolio-sprint-badge">${sprintTitle}</div>
         </div>
-        <div class="portfolio-progress-bar">
-          <div class="portfolio-progress-track">
-            <div class="portfolio-progress-fill" style="width:100%"></div>
-          </div>
-          <span>${c.progress.remaining} remaining</span>
-        </div>
+        ${progressBar}
         ${nowTask}
         ${nextTasks}
       </div>

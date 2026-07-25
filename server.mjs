@@ -69,6 +69,26 @@ function handleRepos(res) {
   }
 }
 
+/**
+ * Reads a sprint's WORK_PLAN.md directly and counts top-level checklist items
+ * (`- [ ]`/`- [x]`, not indented sub-bullets like `_Description_`/`_Spec_`) to get a real
+ * done/total — dab's `status`/`next` don't expose this, and RFC 005 frames the portfolio view
+ * as a factory-side read-model, so this reads the board file directly rather than growing the
+ * dab tool a new field for one UI's sake. Returns null (not a fake 0/0) if the file is missing
+ * or unreadable, so the UI can tell "no data" apart from "an empty plan".
+ */
+function readSprintProgress(config, sprintId) {
+  try {
+    const workPlanPath = path.join(config.repoDir, config.boardDir ?? 'dab', 'sprints', sprintId, 'WORK_PLAN.md');
+    const content = fs.readFileSync(workPlanPath, 'utf-8');
+    const total = (content.match(/^- \[[ xX]\]/gm) ?? []).length;
+    const done = (content.match(/^- \[[xX]\]/gm) ?? []).length;
+    return { done, total };
+  } catch {
+    return null;
+  }
+}
+
 /** GET /api/portfolio — aggregate cross-repo portfolio status for all configured repos */
 function handlePortfolio(res) {
   try {
@@ -103,6 +123,7 @@ function handlePortfolio(res) {
       const inFlightTasks = status?.tasks ? Object.keys(status.tasks) : [];
       const currentTaskId = status?.nextTick?.taskId || inFlightTasks[0] || (sprintTasks[0]?.id ?? null);
       const currentTaskDetail = status?.tasks?.[currentTaskId] || null;
+      const progress = activeSprint ? readSprintProgress(config, activeSprint.id) : null;
 
       const nextTasks = sprintTasks
         .filter(t => t.id !== currentTaskId)
@@ -111,10 +132,7 @@ function handlePortfolio(res) {
       return {
         repo,
         activeSprint: activeSprint ? { id: activeSprint.id, title: activeSprint.title } : null,
-        progress: {
-          remaining: sprintTasks.length,
-          inFlight: inFlightTasks.length,
-        },
+        progress,
         now: currentTaskId ? {
           id: currentTaskId,
           role: currentTaskDetail?.lastRole || status?.nextTick?.role || 'developer',
