@@ -24,15 +24,14 @@ flowchart TD
     D -- yes --> E["resolve the FIRST one that needs<br/>something — see per-task lifecycle"]
     D -- no --> F{active sprint with<br/>zero open tasks?}
     F -- yes --> G["dispatch architect:<br/>sprint-closing"]
-    F -- no --> H{dab next<br/>returns a task?}
-    H -- no --> Idle["idle — nothing to do"]
-    H -- "backlog item,<br/>no sprint yet" --> I["dispatch architect:<br/>needs-design-assessment"]
+    F -- no --> H{dab next<br/>returns a sprint task?}
+    H -- "no — nothing queued,<br/>or only a backlog item<br/>with no active sprint" --> Idle["idle — nothing to do"]
     H -- "sprint todo,<br/>not started" --> J["dispatch developer:<br/>new-task"]
 ```
 
 ## Per-task lifecycle
 
-Once a task is tracked in `state.json`, this is what each tick checks for it. Developer work, architect RFC/sprint work, and sprint-close all flow through the same shape — only the dispatched **role** and what it produces differ. This is the part that answers "do I need to run it right now?"
+Once a task is tracked in `state.json`, this is what each tick checks for it. Developer work, architect rejection-mediation, and sprint-close all flow through the same shape — only the dispatched **role** and what it produces differ. This is the part that answers "do I need to run it right now?"
 
 ```mermaid
 stateDiagram-v2

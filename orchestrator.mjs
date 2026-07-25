@@ -600,31 +600,12 @@ function decide(config, state) {
     };
   }
 
+  // RFC 005: planning is collaborative human work that produces a ready sprint; the factory only
+  // consumes one. A bare backlog item — no active sprint claims it yet — isn't the factory's to
+  // assess or graduate anymore, so it's exactly as actionable as no next item at all: idle.
   const next = JSON.parse(runDab(config, ['next']));
-  if (!next) {
+  if (!next || next.source === 'backlog') {
     return { action: 'idle' };
-  }
-
-  if (next.source === 'backlog') {
-    const taskId = next.id ?? next.title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    // Dedup: if dab next handed back a task already in flight, don't re-dispatch it. (With today's
-    // dab next this is also why raising the WIP cap won't fan out to a *different* task yet — it
-    // keeps returning the same still-"active"-on-main task. RFC_001 covers the dab-side fix.)
-    if (state.tasks[taskId]?.branch) {
-      return { action: 'wait', reason: 'next-task-already-in-flight', taskId };
-    }
-    const task = state.tasks[taskId] ?? { branch: null, rejectionCount: 0 };
-    state.tasks[taskId] = task;
-    return {
-      action: 'dispatch',
-      role: 'architect',
-      taskId,
-      sessionName: `factory-architect-${taskId}`,
-      worktree: taskId,
-      reason: 'needs-design-assessment',
-      prompt: `Assess the backlog item "${next.title}" (spec: ${next.spec ?? 'none yet'}). Decide whether it's simple enough to graduate straight to dab/todos/, or whether it needs an RFC + sprint first per your role instructions. Open a PR for whatever dab/ changes you make.`,
-      onDispatched: () => { task.branch = `worktree-${taskId}`; task.worktreeName = taskId; task.lastRole = 'architect'; task.kind = 'board-change'; task.lastDispatchedAt = Date.now(); }
-    };
   }
 
   // source === 'sprint': a concrete task with a spec under todos/, not yet started
