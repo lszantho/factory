@@ -22,17 +22,17 @@ flowchart TD
     C -- issues --> BlockedCheck["blocked: dab-check-issues<br/>fix the repo's dab/ bookkeeping first"]
     C -- clean --> D{any task in state.json<br/>still in flight?}
     D -- yes --> E["resolve the FIRST one that needs<br/>something — see per-task lifecycle"]
-    D -- no --> F{active epic with<br/>zero open tasks?}
-    F -- yes --> G["dispatch architect:<br/>epic-closing"]
+    D -- no --> F{active sprint with<br/>zero open tasks?}
+    F -- yes --> G["dispatch architect:<br/>sprint-closing"]
     F -- no --> H{dab next<br/>returns a task?}
     H -- no --> Idle["idle — nothing to do"]
-    H -- "backlog item,<br/>no epic yet" --> I["dispatch architect:<br/>needs-design-assessment"]
-    H -- "epic todo,<br/>not started" --> J["dispatch developer:<br/>new-task"]
+    H -- "backlog item,<br/>no sprint yet" --> I["dispatch architect:<br/>needs-design-assessment"]
+    H -- "sprint todo,<br/>not started" --> J["dispatch developer:<br/>new-task"]
 ```
 
 ## Per-task lifecycle
 
-Once a task is tracked in `state.json`, this is what each tick checks for it. Developer work, architect RFC/epic work, and epic-close all flow through the same shape — only the dispatched **role** and what it produces differ. This is the part that answers "do I need to run it right now?"
+Once a task is tracked in `state.json`, this is what each tick checks for it. Developer work, architect RFC/sprint work, and sprint-close all flow through the same shape — only the dispatched **role** and what it produces differ. This is the part that answers "do I need to run it right now?"
 
 ```mermaid
 stateDiagram-v2
@@ -69,7 +69,7 @@ Note that a PR closed or merged **through any channel** — GitHub's web UI, `gh
 
 | What just happened | What the next tick will do |
 | --- | --- |
-| Nothing dispatched yet, epic has unstarted work | Dispatches a developer for the next task |
+| Nothing dispatched yet, sprint has unstarted work | Dispatches a developer for the next task |
 | You just got a `dispatch` line | Nothing to check yet — running again immediately just says `wait` |
 | A background session finished (`claude agents --json` shows `idle`/`done`, or check `claude logs <id>`) | Run it — it notices the resulting PR and dispatches the reviewer once CI is green |
 | A review just landed (approved or changes-requested) | Run it — dispatches developer/architect to fix, or (with `autoMerge` on) merges the approved, green PR itself |
@@ -77,7 +77,7 @@ Note that a PR closed or merged **through any channel** — GitHub's web UI, `gh
 | A PR is approved + green (`autoMerge: true`, current) | Run it — the tick merges it (squash + delete branch) and clears state; completion was already part of the PR |
 | You see `would-merge` (only if `autoMerge` were off) | **You** run `gh pr merge <PR>` yourself, then run the tick again so it reconciles state |
 | You merged a PR yourself, outside the orchestrator | Run it — the next tick reconciles state (`reconciled-merged`) before considering anything else |
-| An epic's last task just got reconciled | Run it again — *this* tick notices zero remaining tasks and dispatches the architect to close the epic |
+| A sprint's last task just got reconciled | Run it again — *this* tick notices zero remaining tasks and dispatches the architect to close the sprint |
 
 In short: **run it any time something external changed** (a session finished, CI finished, a review landed, you merged something) **and you want the orchestrator to react.** Running it with nothing changed is harmless.
 

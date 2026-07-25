@@ -1,6 +1,6 @@
 # factory
 
-An autonomous, multi-agent software-development pipeline. The factory takes a unit of work from a target repo's backlog and drives it to a merged PR through three AI roles — an **architect** (design / RFC / epic work), a **developer** (implements, tests, opens PRs), and a **reviewer** (the merge gate) — coordinated by a deterministic **orchestrator** that decides who does what next.
+An autonomous, multi-agent software-development pipeline. The factory takes a unit of work from a target repo's backlog and drives it to a merged PR through three AI roles — an **architect** (design / RFC / sprint work), a **developer** (implements, tests, opens PRs), and a **reviewer** (the merge gate) — coordinated by a deterministic **orchestrator** that decides who does what next.
 
 It is built directly on Claude Code's background-agent (`--bg`) and worktree primitives — no external orchestration framework — and is configured per target repo, so the same tool drives any repo that keeps its work in [`dab` (docs-as-board)](https://github.com/lszantho/docs-as-board) format.
 
@@ -50,4 +50,4 @@ The **agent personas** (`architect.md` / `developer.md` / `reviewer.md`) and the
 
 ## Operational status
 
-Currently run **manually**, one tick at a time. As of 2026-07-20 `autoMerge: true` — after the first epic (`linter-modernization`) completed cleanly end-to-end, the human merge gate was retired: the orchestrator now merges an approved, green PR itself (squash + delete branch) and reconciles. The dispatch budget and the manual-tick cadence remain as the still-standing safety gates; a scheduled (cron/launchd) trigger is the next step still deferred. See [ADR 006](docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md).
+Currently run **manually**, one tick at a time. As of 2026-07-20 `autoMerge: true` — after the first sprint (`linter-modernization`) completed cleanly end-to-end, the human merge gate was retired: the orchestrator now merges an approved, green PR itself (squash + delete branch) and reconciles. The dispatch budget and the manual-tick cadence remain as the still-standing safety gates; a scheduled (cron/launchd) trigger is the next step still deferred. See [ADR 006](docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md).

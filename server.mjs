@@ -88,7 +88,7 @@ function handlePortfolio(res) {
         console.error(`Status failed for ${repo}:`, err);
       }
 
-      let dabStatus = { activeEpics: [], activeTasks: [] };
+      let dabStatus = { activeSprints: [], activeTasks: [] };
       try {
         const dabRaw = execFileSync(config.paths.node, [config.paths.dabEntry, 'status'], {
           cwd: config.repoDir, encoding: 'utf-8'
@@ -98,21 +98,21 @@ function handlePortfolio(res) {
         console.error(`Dab status failed for ${repo}:`, err);
       }
 
-      const activeEpic = dabStatus.activeEpics?.[0] ?? null;
-      const epicTasks = dabStatus.activeTasks?.filter(t => activeEpic && t.epic === activeEpic.id) ?? [];
+      const activeSprint = dabStatus.activeSprints?.[0] ?? null;
+      const sprintTasks = dabStatus.activeTasks?.filter(t => activeSprint && t.sprint === activeSprint.id) ?? [];
       const inFlightTasks = status?.tasks ? Object.keys(status.tasks) : [];
-      const currentTaskId = status?.nextTick?.taskId || inFlightTasks[0] || (epicTasks[0]?.id ?? null);
+      const currentTaskId = status?.nextTick?.taskId || inFlightTasks[0] || (sprintTasks[0]?.id ?? null);
       const currentTaskDetail = status?.tasks?.[currentTaskId] || null;
 
-      const nextTasks = epicTasks
+      const nextTasks = sprintTasks
         .filter(t => t.id !== currentTaskId)
         .map(t => ({ id: t.id, title: t.title }));
 
       return {
         repo,
-        activeEpic: activeEpic ? { id: activeEpic.id, title: activeEpic.title } : null,
+        activeSprint: activeSprint ? { id: activeSprint.id, title: activeSprint.title } : null,
         progress: {
-          remaining: epicTasks.length,
+          remaining: sprintTasks.length,
           inFlight: inFlightTasks.length,
         },
         now: currentTaskId ? {

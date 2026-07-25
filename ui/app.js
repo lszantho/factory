@@ -685,7 +685,7 @@ function renderPortfolio(cards) {
   }
 
   portfolioGrid.innerHTML = cards.map((c) => {
-    const epicTitle = c.activeEpic ? escHtml(c.activeEpic.title) : 'No active epic';
+    const sprintTitle = c.activeSprint ? escHtml(c.activeSprint.title) : 'No active sprint';
     const nowTask = c.now ? `
       <div>
         <div class="portfolio-section-label">▶ now</div>
@@ -709,7 +709,7 @@ function renderPortfolio(cards) {
       <div class="portfolio-card">
         <div class="portfolio-card-header">
           <div class="portfolio-repo-name">${escHtml(c.repo)}</div>
-          <div class="portfolio-epic-badge">${epicTitle}</div>
+          <div class="portfolio-sprint-badge">${sprintTitle}</div>
         </div>
         <div class="portfolio-progress-bar">
           <div class="portfolio-progress-track">

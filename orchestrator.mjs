@@ -395,12 +395,12 @@ function dispatch(config, state, { role, sessionName, prompt, worktree, fromPr }
   return { dispatched: true, sessionId: spawned?.sessionId, cwd: spawned?.cwd, pid: spawned?.pid };
 }
 
-function findClosableEpic(statusPayload) {
-  const activeEpicIds = statusPayload.activeEpics.map((e) => e.id).sort();
-  for (const epicId of activeEpicIds) {
-    const hasOpenTask = statusPayload.activeTasks.some((t) => t.epic === epicId);
+function findClosableSprint(statusPayload) {
+  const activeSprintIds = statusPayload.activeSprints.map((e) => e.id).sort();
+  for (const sprintId of activeSprintIds) {
+    const hasOpenTask = statusPayload.activeTasks.some((t) => t.sprint === sprintId);
     if (!hasOpenTask) {
-      return statusPayload.activeEpics.find((e) => e.id === epicId);
+      return statusPayload.activeSprints.find((e) => e.id === sprintId);
     }
   }
   return null;
@@ -554,7 +554,7 @@ function decide(config, state) {
   }
 
   const statusPayload = JSON.parse(runDab(config, ['status']));
-  // `dab next` only fills in `id` when the epic todo's numbered filename (e.g. 01_foo.md)
+  // `dab next` only fills in `id` when the sprint todo's numbered filename (e.g. 01_foo.md)
   // matches its frontmatter id (foo) exactly — it usually doesn't in this repo's convention.
   // `dab status`'s activeTasks reliably maps spec path -> real frontmatter id, so fall back to it.
   const specToId = new Map(statusPayload.activeTasks.map((t) => [t.spec, t.id]));
@@ -581,11 +581,11 @@ function decide(config, state) {
     return { action: 'wait', reason: 'wip-limit-reached', detail: `${inFlightIds.length}/${wipLimit} in flight` };
   }
 
-  const closableEpic = findClosableEpic(statusPayload);
-  // Skip if this epic's close is already in flight (its close PR is tracked) — the in-flight loop is
+  const closableSprint = findClosableSprint(statusPayload);
+  // Skip if this sprint's close is already in flight (its close PR is tracked) — the in-flight loop is
   // already driving it; re-dispatching would duplicate it. Fall through to any other ready work.
-  if (closableEpic && !state.tasks[`epic-close-${closableEpic.id}`]?.branch) {
-    const taskId = `epic-close-${closableEpic.id}`;
+  if (closableSprint && !state.tasks[`sprint-close-${closableSprint.id}`]?.branch) {
+    const taskId = `sprint-close-${closableSprint.id}`;
     const task = state.tasks[taskId] ?? { branch: null, rejectionCount: 0 };
     state.tasks[taskId] = task;
     return {
@@ -594,8 +594,8 @@ function decide(config, state) {
       taskId,
       sessionName: `factory-architect-${taskId}`,
       worktree: taskId,
-      reason: 'epic-closing',
-      prompt: `The epic "${closableEpic.id}" (${closableEpic.title}) has no remaining open tasks. Review it end-to-end per your role instructions and, if it genuinely delivered what its overview.md proposed, run \`dab epic close ${closableEpic.id}\` and open a PR for the archive move. Spec: ${closableEpic.spec}`,
+      reason: 'sprint-closing',
+      prompt: `The sprint "${closableSprint.id}" (${closableSprint.title}) has no remaining open tasks. Review it end-to-end per your role instructions and, if it genuinely delivered what its overview.md proposed, run \`dab sprint close ${closableSprint.id}\` and open a PR for the archive move. Spec: ${closableSprint.spec}`,
       onDispatched: () => { task.branch = `worktree-${taskId}`; task.worktreeName = taskId; task.lastRole = 'architect'; task.kind = 'board-change'; task.lastDispatchedAt = Date.now(); }
     };
   }
@@ -622,12 +622,12 @@ function decide(config, state) {
       sessionName: `factory-architect-${taskId}`,
       worktree: taskId,
       reason: 'needs-design-assessment',
-      prompt: `Assess the backlog item "${next.title}" (spec: ${next.spec ?? 'none yet'}). Decide whether it's simple enough to graduate straight to dab/todos/, or whether it needs an RFC + epic first per your role instructions. Open a PR for whatever dab/ changes you make.`,
+      prompt: `Assess the backlog item "${next.title}" (spec: ${next.spec ?? 'none yet'}). Decide whether it's simple enough to graduate straight to dab/todos/, or whether it needs an RFC + sprint first per your role instructions. Open a PR for whatever dab/ changes you make.`,
       onDispatched: () => { task.branch = `worktree-${taskId}`; task.worktreeName = taskId; task.lastRole = 'architect'; task.kind = 'board-change'; task.lastDispatchedAt = Date.now(); }
     };
   }
 
-  // source === 'epic': a concrete task with a spec under todos/, not yet started
+  // source === 'sprint': a concrete task with a spec under todos/, not yet started
   const taskId = next.id ?? specToId.get(next.spec) ?? path.basename(next.spec, '.md');
   // Dedup (also the ADR-008 latent-bug fix): never re-dispatch a task already in flight.
   if (state.tasks[taskId]?.branch) {
@@ -964,8 +964,8 @@ function main() {
     }
 
     // Observe current reality, not a pre-merge snapshot. If the checkout can't be fast-forwarded to
-    // origin, decisions about what work to start next (findClosableEpic, dab next) would run against
-    // stale files — the exact cause of a spurious "re-close an already-closed epic" dispatch — so
+    // origin, decisions about what work to start next (findClosableSprint, dab next) would run against
+    // stale files — the exact cause of a spurious "re-close an already-closed sprint" dispatch — so
     // stop rather than act on a stale board.
     const sync = syncTargetRepo(config);
     if (!sync.ok) {
