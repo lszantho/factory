@@ -4,7 +4,7 @@
   "dryRun": false,
   "autoMerge": true,
   "maxConcurrentTasks": 1,
-  "stopAfterTask": "production_sign_off_for_registry_pipeline",
+  "stopAfterTask": null,
   "disallowedTools": [
     "Bash(gh pr merge*)",
     "Bash(git push --force*)",
@@ -22,7 +22,7 @@
   "reviewerGhTokenPath": "/Users/lucian/.config/factory/leanmacrofeed-reviewer-token",
   "paths": {
     "node": "/Users/lucian/.local/share/fnm/node-versions/v24.18.0/installation/bin/node",
-    "dabEntry": "/Users/lucian/Works/docs-as-board/docs-as-board-node/dist/bin/index.js",
+    "dabEntry": "/Users/lucian/Works/docs-as-board/dist/bin/index.js",
     "claude": "/opt/homebrew/bin/claude",
     "gh": "/opt/homebrew/bin/gh"
   }
