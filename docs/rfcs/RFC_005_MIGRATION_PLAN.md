@@ -1,6 +1,6 @@
 # RFC 005 — Step 0 migration plan (`epic` → `sprint`)
 
-**Status: PARKED.** Do not execute until the [precondition](#precondition-clean-slate) holds. This is the concrete cutover plan for [RFC 005](RFC_005_SPRINT_ORIENTED_PLANNING.md) Rollout step 0 — the total rename of `epic` → `sprint`. It is deliberately a **hard cutover on a quiescent board**, not a live mid-sprint change (see the RFC's "Rename blast radius" risk and the survey below for why now-is-dangerous).
+**Status: EXECUTED (2026-07-25).** The precondition held right after `acquisition-reliability` closed, and the cutover ran as planned: `docs-as-board-node` (the dab tool) landed first, then LeanMacroFeed's board + personas, then the factory's `orchestrator.mjs` + docs, in that order, each verified before the next. This is the concrete cutover plan for [RFC 005](RFC_005_SPRINT_ORIENTED_PLANNING.md) Rollout step 0 — the total rename of `epic` → `sprint`. It was deliberately a **hard cutover on a quiescent board**, not a live mid-sprint change (see the RFC's "Rename blast radius" risk and the survey below for why it would otherwise have been dangerous).
 
 ## Why parked
 

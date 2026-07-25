@@ -1,5 +1,9 @@
 # RFC 004: Multi-Backend Agents
 
+## Status
+
+**Proposed — sketch, no code yet.** Unlike the other RFCs in this directory, this one hasn't been through a collaborative design pass; it's a first-draft problem statement and a three-phase shape, not a settled design. Worth a look before building anything here: [RFC 005](RFC_005_SPRINT_ORIENTED_PLANNING.md) and the docs-as-board multi-language submodule suite it replaced are both examples of the same failure mode — speculative breadth built ahead of any real need — so a genuine multi-backend push should start from a concrete, current pain point (a specific quota outage, a specific task that would benefit from a different model) rather than this sketch's abstract vendor-lock-in framing.
+
 ## Problem
 Currently, the factory orchestrator (`orchestrator.mjs`) is tightly coupled to Anthropic's Claude Code CLI. When Claude API quota is exhausted, the entire factory pipeline halts. Furthermore, being locked into a single vendor prevents us from leveraging strengths of other frontier models (like Gemini's speed and large context window).
 

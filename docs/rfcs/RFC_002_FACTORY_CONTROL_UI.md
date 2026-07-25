@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed** — not yet built. Describes a small local UI for observing and driving the factory, plus a concrete MVP-first rollout.
+**Implemented.** The local dashboard (`server.mjs` + `ui/`) exists and has grown past this RFC's original MVP scope: the tick button with SSE streaming, the decision-log timeline, and repo/config views described below all shipped, plus features this RFC didn't anticipate — kill-stuck-session, a live processes view, bug-report snapshotting, and the cross-repo portfolio view ([RFC 005](RFC_005_SPRINT_ORIENTED_PLANNING.md) §6).
 
 ## Motivation
 
