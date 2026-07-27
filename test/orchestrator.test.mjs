@@ -17,6 +17,9 @@ import {
   logQuiet,
   sessionActivelyWriting,
   canFastSkip,
+  checkOutcome,
+  ciState,
+  isCiGreen,
 } from '../orchestrator.mjs';
 
 // ---- quietSig ----------------------------------------------------------------------------
@@ -185,4 +188,87 @@ test('canFastSkip: uses the default activeSessionSeconds (90) when unset in conf
   const config = { maxConcurrentTasks: 1 }; // no activeSessionSeconds set
   const state = { tasks: { a: { branch: 'x', sessionCwd: '/c', sessionId: 's' } } };
   assert.equal(canFastSkip(config, state), true);
+});
+
+// ---- ciState / checkOutcome --------------------------------------------------------------
+// Regression cover for the two mirror-image defects in the old two-state isCiGreen():
+// an empty rollup read as "not green" (permanent silent stall when CI is off), and a *running*
+// CheckRun read as green (merging before checks finish, with autoMerge on).
+
+test('checkOutcome: a running CheckRun is pending, not green', () => {
+  // Exactly what `gh pr view --json statusCheckRollup` returns mid-run: conclusion is an empty
+  // STRING, not null, which is why `??` fell through to it and reported green.
+  assert.equal(
+    checkOutcome({ __typename: 'CheckRun', status: 'IN_PROGRESS', conclusion: '' }),
+    'pending',
+  );
+  assert.equal(checkOutcome({ __typename: 'CheckRun', status: 'QUEUED', conclusion: '' }), 'pending');
+});
+
+test('checkOutcome: completed conclusions map to ok or red', () => {
+  assert.equal(checkOutcome({ status: 'COMPLETED', conclusion: 'SUCCESS' }), 'ok');
+  assert.equal(checkOutcome({ status: 'COMPLETED', conclusion: 'FAILURE' }), 'red');
+  assert.equal(checkOutcome({ status: 'COMPLETED', conclusion: 'TIMED_OUT' }), 'red');
+  // Deploy jobs gated to pushes on main are SKIPPED on every PR — benign, not a failure.
+  assert.equal(checkOutcome({ status: 'COMPLETED', conclusion: 'SKIPPED' }), 'ok');
+  assert.equal(checkOutcome({ status: 'COMPLETED', conclusion: 'NEUTRAL' }), 'ok');
+});
+
+test('checkOutcome: legacy StatusContext entries carry only `state`', () => {
+  assert.equal(checkOutcome({ __typename: 'StatusContext', state: 'SUCCESS' }), 'ok');
+  assert.equal(checkOutcome({ __typename: 'StatusContext', state: 'FAILURE' }), 'red');
+  assert.equal(checkOutcome({ __typename: 'StatusContext', state: 'PENDING' }), 'pending');
+});
+
+test('ciState: an empty rollup is "none", distinct from "pending"', () => {
+  assert.equal(ciState({ statusCheckRollup: [] }), 'none');
+  assert.equal(ciState({}), 'none');
+  assert.equal(ciState(null), 'none');
+});
+
+test('ciState: green only when every check has finished successfully', () => {
+  assert.equal(
+    ciState({ statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] }),
+    'green',
+  );
+  assert.equal(
+    ciState({
+      statusCheckRollup: [
+        { status: 'COMPLETED', conclusion: 'SUCCESS' },
+        { status: 'COMPLETED', conclusion: 'SKIPPED' },
+      ],
+    }),
+    'green',
+  );
+});
+
+test('ciState: one unfinished check holds the whole rollup at pending', () => {
+  assert.equal(
+    ciState({
+      statusCheckRollup: [
+        { status: 'COMPLETED', conclusion: 'SUCCESS' },
+        { status: 'IN_PROGRESS', conclusion: '' },
+      ],
+    }),
+    'pending',
+  );
+});
+
+test('ciState: red wins over pending, so a known failure never waits on the rest', () => {
+  assert.equal(
+    ciState({
+      statusCheckRollup: [
+        { status: 'IN_PROGRESS', conclusion: '' },
+        { status: 'COMPLETED', conclusion: 'FAILURE' },
+      ],
+    }),
+    'red',
+  );
+});
+
+test('isCiGreen: only "green" merges — none, pending and red all hold', () => {
+  assert.equal(isCiGreen({ statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'SUCCESS' }] }), true);
+  assert.equal(isCiGreen({ statusCheckRollup: [{ status: 'IN_PROGRESS', conclusion: '' }] }), false);
+  assert.equal(isCiGreen({ statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] }), false);
+  assert.equal(isCiGreen({ statusCheckRollup: [] }), false);
 });

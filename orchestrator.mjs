@@ -304,12 +304,57 @@ function findPrForBranch(config, branch) {
 
 const CI_BAD_CONCLUSIONS = new Set(['FAILURE', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED', 'STARTUP_FAILURE', 'STALE']);
 
-function isCiGreen(pr) {
-  const rollup = pr.statusCheckRollup ?? [];
-  if (rollup.length === 0) return false;
-  // SKIPPED is common and benign here (deploy jobs that only run on pushes to main, not PRs) —
-  // only a genuinely bad conclusion should count as red, not "not literally SUCCESS".
-  return rollup.every((c) => !CI_BAD_CONCLUSIONS.has((c.conclusion ?? c.state ?? '').toUpperCase()));
+// A check that hasn't finished reports its state in one of these, depending on the rollup entry
+// type. `''` belongs here because a *running* CheckRun serialises as `conclusion: ""` — an empty
+// string, not null — which is the single most important case in this file to get right.
+const CI_PENDING_STATES = new Set(['', 'PENDING', 'QUEUED', 'IN_PROGRESS', 'WAITING', 'REQUESTED', 'EXPECTED']);
+
+/**
+ * One rollup entry -> 'ok' | 'pending' | 'red'.
+ *
+ * Two entry shapes come back from `gh pr view --json statusCheckRollup`: a **CheckRun** (GitHub
+ * Actions) carries `status` + `conclusion`; a **StatusContext** (legacy commit status) carries
+ * only `state`. A CheckRun still running has `status: "IN_PROGRESS"` and `conclusion: ""`.
+ *
+ * That empty string is why this used to read `c.conclusion ?? c.state ?? ''`: `??` only falls
+ * through on null/undefined, so `""` was returned as-is, `""` is not a bad conclusion, and a check
+ * that was still running was reported **green**. With `autoMerge` on that meant a PR could be
+ * merged before its checks finished — CI gated nothing at all once a single entry existed.
+ */
+export function checkOutcome(entry) {
+  const status = (entry.status ?? '').toUpperCase();
+  // CheckRun: anything short of COMPLETED is pending, whatever `conclusion` currently says.
+  if (status && status !== 'COMPLETED') return 'pending';
+  // `||` not `??` — an empty-string conclusion must fall through to `state` rather than be taken
+  // as a final answer.
+  const outcome = (entry.conclusion || entry.state || '').toUpperCase();
+  if (CI_PENDING_STATES.has(outcome)) return 'pending';
+  if (CI_BAD_CONCLUSIONS.has(outcome)) return 'red';
+  // SKIPPED and NEUTRAL are common and benign (deploy jobs that only run on pushes to main, not
+  // PRs) — only a genuinely bad conclusion counts as red, not "not literally SUCCESS".
+  return 'ok';
+}
+
+/**
+ * The rollup as a whole -> 'none' | 'red' | 'pending' | 'green'.
+ *
+ * `'none'` is deliberately distinct from `'pending'`. An empty rollup means either "checks have
+ * not attached yet" (a race, moments after a PR opens) or "no CI is configured / the workflow is
+ * disabled" (permanent). Both must block a merge, but only the second is something a human needs
+ * told about — collapsing them into a bare `false` made a disabled workflow look exactly like
+ * normal waiting, and the factory sat in `wait` with no distinguishing symptom.
+ */
+export function ciState(pr) {
+  const rollup = pr?.statusCheckRollup ?? [];
+  if (rollup.length === 0) return 'none';
+  const outcomes = rollup.map(checkOutcome);
+  if (outcomes.includes('red')) return 'red';
+  if (outcomes.includes('pending')) return 'pending';
+  return 'green';
+}
+
+export function isCiGreen(pr) {
+  return ciState(pr) === 'green';
 }
 
 function latestRejectionTag(config, prNumber) {
@@ -534,7 +579,24 @@ function inFlightAction(config, taskId, task, titleHint) {
     };
   }
 
-  return { action: 'wait', reason: 'ci-pending-or-no-review-yet', taskId };
+  // Say *which* of the several "not ready yet" conditions this is. The old single reason,
+  // 'ci-pending-or-no-review-yet', covered a transient wait and a permanently-stuck repo equally
+  // well, so a disabled CI workflow was indistinguishable from patience.
+  return { action: 'wait', reason: ciWaitReason(pr), taskId };
+}
+
+/** Why an open PR isn't moving, specific enough to act on without opening GitHub. */
+function ciWaitReason(pr) {
+  switch (ciState(pr)) {
+    case 'none':
+      return 'ci-not-reporting: no checks attached to this PR — is the workflow enabled, and does it trigger on pull_request?';
+    case 'red':
+      return 'ci-red';
+    case 'pending':
+      return 'ci-pending';
+    default:
+      return pr.reviewDecision === 'CHANGES_REQUESTED' ? 'awaiting-fix-push' : 'awaiting-review';
+  }
 }
 
 function decide(config, state) {
@@ -544,6 +606,11 @@ function decide(config, state) {
   }
 
   // Finish in-flight tracked work (any role) before starting anything new.
+  // Keep the first in-flight wait: if nothing downstream turns out to be actionable either, that
+  // reason is the one worth reporting. Falling through to a generic 'wip-limit-reached' hid the
+  // real blocker — an operator saw "at capacity" when the truth was "PR #230's checks never
+  // attached", which are very different problems with very different fixes.
+  let firstInFlightWait = null;
   for (const taskId of Object.keys(state.tasks).sort()) {
     const task = state.tasks[taskId];
     if (!task.branch) continue;
@@ -551,6 +618,7 @@ function decide(config, state) {
     if (result.action !== 'wait') {
       return result;
     }
+    firstInFlightWait ??= result;
   }
 
   const statusPayload = JSON.parse(runDab(config, ['status']));
@@ -578,6 +646,10 @@ function decide(config, state) {
   const inFlightIds = Object.keys(state.tasks).filter((id) => state.tasks[id].branch);
   const wipLimit = config.maxConcurrentTasks ?? 1;
   if (inFlightIds.length >= wipLimit) {
+    // At capacity *because* of the in-flight task above — so report why that one isn't moving,
+    // not the capacity symptom it causes. Without this the operator-facing answer to "why is the
+    // factory stuck?" is "it's busy", which is true and useless.
+    if (firstInFlightWait) return firstInFlightWait;
     return { action: 'wait', reason: 'wip-limit-reached', detail: `${inFlightIds.length}/${wipLimit} in flight` };
   }
 
@@ -637,11 +709,9 @@ function decide(config, state) {
 const ACTIONABLE_ACTIONS = new Set(['dispatch', 'merge', 'reconcile-merged']);
 
 function ciLabel(pr) {
-  const rollup = pr?.statusCheckRollup ?? [];
-  if (rollup.length === 0) return 'no-ci';
-  if (isCiGreen(pr)) return 'green';
-  const bad = rollup.some((c) => CI_BAD_CONCLUSIONS.has((c.conclusion ?? c.state ?? '').toUpperCase()));
-  return bad ? 'RED' : 'pending';
+  // Previously this asked isCiGreen() first, which returned true for a still-running check — so
+  // 'pending' was unreachable and `--status` printed `CI:green` while Validate was in progress.
+  return { none: 'no-ci', red: 'RED', pending: 'pending', green: 'green' }[ciState(pr)];
 }
 
 function describeDecision(d) {
