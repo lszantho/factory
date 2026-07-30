@@ -35,6 +35,7 @@ const pollDot             = $('poll-dot');
 const pollLabel           = $('poll-label');
 const autopilotBadge      = $('autopilot-badge');
 const disconnectedBanner  = $('disconnected-banner');
+const sprintRegion        = $('sprint-region');
 const verdictRegion       = $('verdict-region');
 const tickPanel           = $('tick-panel');
 const tickOutput          = $('tick-output');
@@ -153,11 +154,42 @@ function escHtml(str) {
 
 // ── Render helpers ────────────────────────────────────────────────────────────
 
+// Answers "which task, out of how many in the sprint" — previously answerable only by opening
+// the sprint's WORK_PLAN.md and counting checkboxes by hand while the tracked-task panel below
+// names a task with no sense of how far through the sprint it sits.
+function renderSprint(status) {
+  const sprint = status.activeSprint;
+  if (!sprint) {
+    sprintRegion.innerHTML = '';
+    return;
+  }
+  const p = sprint.progress;
+  const pct = p && p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+  sprintRegion.innerHTML = `
+    <div class="sprint-banner">
+      <div class="sprint-title">${escHtml(sprint.title)}</div>
+      ${p ? `
+        <div class="sprint-progress-track" title="${p.done} of ${p.total} sprint tasks done">
+          <div class="sprint-progress-fill" style="width:${pct}%"></div>
+        </div>
+        <div class="sprint-progress-label">${p.done} / ${p.total} tasks</div>
+      ` : ''}
+    </div>
+  `;
+}
+
 function renderVerdict(status) {
   const nt      = status.nextTick;
   const marker  = nt.marker; // 'act' | 'wait' | 'blocked'
-  const icon    = marker === 'act' ? '▶' : marker === 'blocked' ? '⚠' : '⏸';
-  const label   = marker === 'act' ? 'Act — run next tick now' : marker === 'blocked' ? 'Blocked — needs attention' : 'Wait — nothing to do yet';
+  // 'awaiting-operator' is a distinct flavor of 'blocked': the factory isn't broken and isn't
+  // waiting on GitHub/CI, it's working exactly as designed and needs a human to take one specific
+  // step (running a command against production, a decision only the operator can make). Same
+  // banner styling/button-disable as any other 'blocked' — that mechanism already existed — but a
+  // generic "⚠ Blocked — needs attention" reads as "something's wrong", which understates how
+  // routine and expected this state actually is.
+  const isAwaitingOperator = marker === 'blocked' && nt.reason === 'awaiting-operator';
+  const icon    = isAwaitingOperator ? '🧑' : marker === 'act' ? '▶' : marker === 'blocked' ? '⚠' : '⏸';
+  const label   = isAwaitingOperator ? 'Your turn' : marker === 'act' ? 'Act — run next tick now' : marker === 'blocked' ? 'Blocked — needs attention' : 'Wait — nothing to do yet';
 
   // Button is enabled ONLY when the orchestrator verdict is actionable ('act') and no agent/tick is active.
   // Post-tick cooldown: after a tick dispatches an agent, sessionRunning may take a few seconds to
@@ -187,7 +219,7 @@ function renderVerdict(status) {
   else if (marker === 'blocked') btnTitle = `Blocked: ${nt.description}`;
 
   verdictRegion.innerHTML = `
-    <div class="verdict-banner ${escHtml(marker)}">
+    <div class="verdict-banner ${escHtml(marker)}${isAwaitingOperator ? ' awaiting-operator' : ''}">
       <div class="verdict-icon">${icon}</div>
       <div class="verdict-text">
         <div class="verdict-label">${escHtml(label)}</div>
@@ -499,6 +531,7 @@ async function fetchStatus() {
       autopilotBadge.classList.add('hidden');
     }
 
+    renderSprint(status);
     renderVerdict(status);
     renderGauges(status);
     renderTasks(status);

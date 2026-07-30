@@ -440,10 +440,47 @@ function dispatch(config, state, { role, sessionName, prompt, worktree, fromPr }
   return { dispatched: true, sessionId: spawned?.sessionId, cwd: spawned?.cwd, pid: spawned?.pid };
 }
 
-function findClosableSprint(statusPayload) {
+// "5 of 12" for the active sprint's WORK_PLAN.md — checked vs. total top-level checklist items.
+// Mirrors server.mjs's readSprintProgress (used today only by the portfolio view) so both surfaces
+// agree; kept as its own small read here rather than routed through dab, since it's a plain
+// regex over a file this process already knows the path to; the sprint id it needs comes from
+// dab status's existing activeSprints, so it costs no extra dab call as well.
+function readSprintProgress(config, sprintId) {
+  try {
+    const workPlanPath = path.join(config.repoDir, config.boardDir ?? 'dab', 'sprints', sprintId, 'WORK_PLAN.md');
+    const content = fs.readFileSync(workPlanPath, 'utf-8');
+    const total = (content.match(/^- \[[ xX]\]/gm) ?? []).length;
+    const done = (content.match(/^- \[[xX]\]/gm) ?? []).length;
+    return { done, total };
+  } catch {
+    return null;
+  }
+}
+
+/** The first task in a currently-active sprint whose status is blocked-operator, or null.
+ *  `dab next` already refuses to hand one of these out as workable, so its absence from `next`'s
+ *  result only tells you nothing is dispatchable — not *why*. This answers the why, so `decide()`
+ *  can report "waiting on you" instead of a bare "idle" that looks identical to genuinely having
+ *  nothing left. */
+export function findOperatorBlockedTask(statusPayload) {
+  const activeSprintIds = new Set(statusPayload.activeSprints.map((e) => e.id));
+  return (statusPayload.blockedTasks ?? []).find((t) => t.sprint && activeSprintIds.has(t.sprint)) ?? null;
+}
+
+export function findClosableSprint(statusPayload) {
+  // A sprint is closable only when NONE of dab status's three task buckets still claim it —
+  // not just activeTasks. This used to check activeTasks alone, which had two live bugs:
+  // a task someone had actually claimed (inProgressTasks) was invisible to this check, and so
+  // was a task stuck on the operator (blockedTasks, added alongside this fix). Both meant a
+  // sprint could be reported closable while real or human-only work was still open on it —
+  // the second one is exactly what motivated adding blockedTasks in the first place: an
+  // orchestrator dispatching a sprint-close architect onto a sprint whose last item was "run
+  // this against production" is the same wasted-cycle mistake as dispatching a developer onto
+  // it, just one step later in the sprint's lifecycle.
+  const openBuckets = [statusPayload.activeTasks, statusPayload.inProgressTasks, statusPayload.blockedTasks ?? []];
   const activeSprintIds = statusPayload.activeSprints.map((e) => e.id).sort();
   for (const sprintId of activeSprintIds) {
-    const hasOpenTask = statusPayload.activeTasks.some((t) => t.sprint === sprintId);
+    const hasOpenTask = openBuckets.some((bucket) => bucket.some((t) => t.sprint === sprintId));
     if (!hasOpenTask) {
       return statusPayload.activeSprints.find((e) => e.id === sprintId);
     }
@@ -599,7 +636,7 @@ function ciWaitReason(pr) {
   }
 }
 
-function decide(config, state) {
+export function decide(config, state) {
   const check = JSON.parse(runDab(config, ['check', '--json']));
   if (check.length > 0) {
     return { action: 'blocked', reason: 'dab-check-issues', detail: check };
@@ -674,9 +711,21 @@ function decide(config, state) {
 
   // RFC 005: planning is collaborative human work that produces a ready sprint; the factory only
   // consumes one. A bare backlog item — no active sprint claims it yet — isn't the factory's to
-  // assess or graduate anymore, so it's exactly as actionable as no next item at all: idle.
+  // assess or graduate anymore, so it's exactly as actionable as no next item at all: idle —
+  // unless the *reason* nothing else is resolvable is a task stuck on the operator, in which case
+  // idle is the wrong word for it: "nothing to do" and "waiting on you" call for different
+  // responses from a human skimming the board, and only one of them is actually true here.
   const next = JSON.parse(runDab(config, ['next']));
   if (!next || next.source === 'backlog') {
+    const blockedInActiveSprint = findOperatorBlockedTask(statusPayload);
+    if (blockedInActiveSprint) {
+      return {
+        action: 'blocked',
+        reason: 'awaiting-operator',
+        taskId: blockedInActiveSprint.id,
+        detail: blockedInActiveSprint.blockedReason ?? `${blockedInActiveSprint.title} needs operator action — see its task spec`,
+      };
+    }
     return { action: 'idle' };
   }
 
@@ -714,13 +763,19 @@ function ciLabel(pr) {
   return { none: 'no-ci', red: 'RED', pending: 'pending', green: 'green' }[ciState(pr)];
 }
 
-function describeDecision(d) {
+export function describeDecision(d) {
   switch (d.action) {
     case 'dispatch': return `dispatch ${d.role} for "${d.taskId}" (${d.reason})`;
     case 'merge': return `merge PR #${d.prNumber} for "${d.taskId}" — autoMerge`;
     case 'reconcile-merged': return `reconcile "${d.taskId}" — PR #${d.prNumber} was merged outside the orchestrator`;
     case 'wait': return `wait — ${d.reason}${d.taskId ? ` ("${d.taskId}")` : ''}`;
-    case 'blocked': return `blocked — ${d.reason}`;
+    // `detail` already carries useful text on several blocked reasons (dab-check-issues' issue
+    // list, repo-sync-failed's git error, this one's operator instructions) but nothing before
+    // this rendered it — the banner said only "blocked — <reason>", and the actual "why" lived
+    // in the JSON's .detail field where no human-facing surface showed it. Only append it when
+    // it's a plain string: an array/object detail (dab-check-issues) stays as compact as before
+    // rather than dumping a raw JSON blob into a one-line banner.
+    case 'blocked': return `blocked — ${d.reason}${d.taskId ? ` ("${d.taskId}")` : ''}${typeof d.detail === 'string' ? `: ${d.detail}` : ''}`;
     case 'idle': return d.reason === 'autopilot-checkpoint-reached'
       ? `idle — autopilot checkpoint reached (${d.detail})`
       : 'idle — no tracked work, and nothing queued on the board';
@@ -742,6 +797,16 @@ function renderStatus(config) {
   out.push(`gh auth: ${authOk ? 'ok' : 'NOT AUTHENTICATED'}    budget: ${budget.count}/${budget.cap} in ${config.budget?.windowMinutes ?? 300}m    autoMerge: ${config.autoMerge ? 'on' : 'off'}`);
   out.push(`last tick: ${state.lastTickAt ?? '(never)'}`);
   out.push(`repo: ${repoHead(config)}${sync.ok ? '' : `   ⚠ NOT SYNCED to origin (${sync.error}) — showing local state`}`);
+  // "Which task, out of how many in the sprint" was previously answerable only by opening the
+  // sprint's WORK_PLAN.md and counting by hand — the tracked-task list below names a task with
+  // no sense of how far through the sprint it sits.
+  try {
+    const activeSprint = JSON.parse(runDab(config, ['status'])).activeSprints[0];
+    if (activeSprint) {
+      const progress = readSprintProgress(config, activeSprint.id);
+      out.push(`sprint: ${activeSprint.title}${progress ? `  (${progress.done}/${progress.total} tasks done)` : ''}`);
+    }
+  } catch { /* best-effort — a status line is not worth failing --status over */ }
   out.push('');
 
   const taskIds = Object.keys(state.tasks).sort();
@@ -798,6 +863,14 @@ function renderStatusJson(config) {
   // separately for its own PR lookup) rather than one `claude agents` subprocess per task.
   const agents = claudeAgentsJson(config);
 
+  let activeSprint = null;
+  try {
+    const sprint = JSON.parse(runDab(config, ['status'])).activeSprints[0];
+    if (sprint) {
+      activeSprint = { id: sprint.id, title: sprint.title, progress: readSprintProgress(config, sprint.id) };
+    }
+  } catch { /* best-effort — the UI already handles activeSprint: null */ }
+
   const tasks = {};
   for (const taskId of Object.keys(state.tasks).sort()) {
     const task = state.tasks[taskId];
@@ -838,6 +911,7 @@ function renderStatusJson(config) {
     ghAuth: authOk,
     repoSync: { ok: sync.ok, error: sync.ok ? undefined : sync.error },
     repoHead: repoHead(config),
+    activeSprint,
     config: {
       autoMerge: config.autoMerge ?? false,
       maxConcurrentTasks: config.maxConcurrentTasks ?? 1,
@@ -1047,8 +1121,15 @@ function main() {
       if (isNew) {
         const message = decision.reason === 'pr-closed-without-merge'
           ? `${repoConfigName}: PR #${decision.prNumber} for "${decision.taskId}" was closed without merging — needs a human call (reopen, redo, or drop the task).`
-          : `dab check found issues in ${repoConfigName} — see factory/logs/${repoConfigName}.jsonl`;
-        notify('Factory blocked', message);
+          // Deliberately its own notification title/tone below (see the `notify()` call), not
+          // folded into the generic "Factory blocked" case here: the other two reasons reaching
+          // this branch mean something is wrong (a closed PR, a failing dab check); this one
+          // means the factory is working exactly as designed and waiting on a normal, expected
+          // step only a human can take. Same urgency to see it, different urgency to fix it.
+          : decision.reason === 'awaiting-operator'
+            ? `${repoConfigName}: "${decision.taskId}" needs you — ${decision.detail}`
+            : `dab check found issues in ${repoConfigName} — see factory/logs/${repoConfigName}.jsonl`;
+        notify(decision.reason === 'awaiting-operator' ? 'Factory: your turn' : 'Factory blocked', message);
       }
       return;
     }

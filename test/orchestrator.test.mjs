@@ -20,6 +20,9 @@ import {
   checkOutcome,
   ciState,
   isCiGreen,
+  findClosableSprint,
+  findOperatorBlockedTask,
+  describeDecision,
 } from '../orchestrator.mjs';
 
 // ---- quietSig ----------------------------------------------------------------------------
@@ -271,4 +274,98 @@ test('isCiGreen: only "green" merges — none, pending and red all hold', () => 
   assert.equal(isCiGreen({ statusCheckRollup: [{ status: 'IN_PROGRESS', conclusion: '' }] }), false);
   assert.equal(isCiGreen({ statusCheckRollup: [{ status: 'COMPLETED', conclusion: 'FAILURE' }] }), false);
   assert.equal(isCiGreen({ statusCheckRollup: [] }), false);
+});
+
+// ---- findClosableSprint / findOperatorBlockedTask -------------------------------------------
+// findClosableSprint used to check activeTasks only. Two live bugs followed from that: a task
+// someone had genuinely claimed (in-progress) was invisible to it, and — once blockedTasks
+// existed — so was a task stuck on the operator. Both meant "no activeTasks" could be reported
+// as "sprint is closable" while real work, or a human's turn, was still open on it.
+
+function statusPayload({ activeTasks = [], inProgressTasks = [], blockedTasks = [], activeSprints = [] } = {}) {
+  return { activeTasks, inProgressTasks, blockedTasks, activeSprints };
+}
+
+test('findClosableSprint: a sprint with zero open tasks in any bucket is closable', () => {
+  const result = findClosableSprint(statusPayload({
+    activeSprints: [{ id: 'billing_v2', title: 'Billing V2', spec: 'sprints/billing_v2/overview.md' }],
+  }));
+  assert.deepEqual(result, { id: 'billing_v2', title: 'Billing V2', spec: 'sprints/billing_v2/overview.md' });
+});
+
+test('findClosableSprint: an activeTasks entry blocks closing (the original, always-correct case)', () => {
+  const result = findClosableSprint(statusPayload({
+    activeTasks: [{ id: 'invoice_api', title: 'Invoice API', spec: 'x', sprint: 'billing_v2' }],
+    activeSprints: [{ id: 'billing_v2', title: 'Billing V2', spec: 'sprints/billing_v2/overview.md' }],
+  }));
+  assert.equal(result, null);
+});
+
+test('findClosableSprint: an inProgressTasks entry blocks closing (the first bug this fixes)', () => {
+  const result = findClosableSprint(statusPayload({
+    inProgressTasks: [{ id: 'invoice_api', title: 'Invoice API', spec: 'x', sprint: 'billing_v2' }],
+    activeSprints: [{ id: 'billing_v2', title: 'Billing V2', spec: 'sprints/billing_v2/overview.md' }],
+  }));
+  assert.equal(result, null);
+});
+
+test('findClosableSprint: a blockedTasks entry blocks closing (the second bug this fixes)', () => {
+  const result = findClosableSprint(statusPayload({
+    blockedTasks: [{ id: 'seed_prod', title: 'Seed Prod', spec: 'x', sprint: 'billing_v2', blockedReason: 'Run against production' }],
+    activeSprints: [{ id: 'billing_v2', title: 'Billing V2', spec: 'sprints/billing_v2/overview.md' }],
+  }));
+  assert.equal(result, null);
+});
+
+test('findClosableSprint: a task belonging to a different sprint does not block this one', () => {
+  const result = findClosableSprint(statusPayload({
+    blockedTasks: [{ id: 'other', title: 'Other', spec: 'x', sprint: 'reporting' }],
+    activeSprints: [{ id: 'billing_v2', title: 'Billing V2', spec: 'sprints/billing_v2/overview.md' }],
+  }));
+  assert.deepEqual(result, { id: 'billing_v2', title: 'Billing V2', spec: 'sprints/billing_v2/overview.md' });
+});
+
+test('findOperatorBlockedTask: finds a blocked task belonging to a currently-active sprint', () => {
+  const blocked = { id: 'seed_prod', title: 'Seed Prod', spec: 'x', sprint: 'billing_v2', blockedReason: 'Run against production' };
+  const result = findOperatorBlockedTask(statusPayload({
+    blockedTasks: [blocked],
+    activeSprints: [{ id: 'billing_v2', title: 'Billing V2', spec: 'x' }],
+  }));
+  assert.deepEqual(result, blocked);
+});
+
+test('findOperatorBlockedTask: null when the blocked task belongs to a sprint that is not active', () => {
+  const result = findOperatorBlockedTask(statusPayload({
+    blockedTasks: [{ id: 'seed_prod', title: 'Seed Prod', spec: 'x', sprint: 'archived_sprint' }],
+    activeSprints: [{ id: 'billing_v2', title: 'Billing V2', spec: 'x' }],
+  }));
+  assert.equal(result, null);
+});
+
+test('findOperatorBlockedTask: null when blockedTasks is empty', () => {
+  assert.equal(findOperatorBlockedTask(statusPayload({ activeSprints: [{ id: 'billing_v2', title: 'B', spec: 'x' }] })), null);
+});
+
+// ---- describeDecision --------------------------------------------------------------------
+// The 'blocked' case used to render as just "blocked — <reason>" — decision.detail existed
+// (dab-check-issues carries the actual issue list, repo-sync-failed the git error) but nothing
+// showed it, so the one line an operator actually sees never said *why*.
+
+test('describeDecision: awaiting-operator renders the taskId and the human-facing detail', () => {
+  const text = describeDecision({
+    action: 'blocked',
+    reason: 'awaiting-operator',
+    taskId: 'seed_prod',
+    detail: 'Run `pnpm history import --force-remote` against production',
+  });
+  assert.equal(text, 'blocked — awaiting-operator ("seed_prod"): Run `pnpm history import --force-remote` against production');
+});
+
+test('describeDecision: a non-string detail (e.g. dab-check-issues\' array) is not dumped inline', () => {
+  const text = describeDecision({ action: 'blocked', reason: 'dab-check-issues', detail: [{ category: 'orphaned-link' }] });
+  assert.equal(text, 'blocked — dab-check-issues');
+});
+
+test('describeDecision: blocked with no detail at all is unchanged from before', () => {
+  assert.equal(describeDecision({ action: 'blocked', reason: 'gh-not-authenticated' }), 'blocked — gh-not-authenticated');
 });

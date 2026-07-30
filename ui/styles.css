@@ -22,6 +22,11 @@
   --color-wait-glow:rgba(210,153,34,0.2);
   --color-blocked: #f85149;
   --color-blocked-glow:rgba(248,81,73,0.2);
+  /* "your turn" is a distinct flavor of blocked — the factory isn't broken, it's waiting on one
+     normal, expected step only a human can take. Red reads as "something's wrong"; this doesn't
+     say that. */
+  --color-operator: #58a6ff;
+  --color-operator-glow:rgba(88,166,255,0.2);
 
   /* CI colours */
   --color-green:   #3fb950;
@@ -178,6 +183,42 @@ body {
 }
 .autopilot-badge.hidden { display: none; }
 
+/* ── Sprint progress banner ───────────────────────────────────────────────── */
+.sprint-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 4px 14px;
+  font-size: 0.85rem;
+}
+.sprint-title {
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sprint-progress-track {
+  flex: 1;
+  min-width: 60px;
+  max-width: 220px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.sprint-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-act);
+  transition: width 0.3s;
+}
+.sprint-progress-label {
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Verdict banner ────────────────────────────────────────────────────────── */
 .verdict-banner {
   border-radius: var(--radius-lg);
@@ -209,6 +250,13 @@ body {
   background: rgba(248,81,73,0.07);
   border-color: rgba(248,81,73,0.3);
 }
+/* Applied by app.js alongside .blocked (never instead of it) when nextTick.reason is
+   'awaiting-operator' — overrides the red styling above with the calmer blue defined for it. */
+.verdict-banner.blocked.awaiting-operator {
+  background: rgba(88,166,255,0.08);
+  border-color: rgba(88,166,255,0.35);
+}
+.verdict-banner.blocked.awaiting-operator .verdict-label { color: var(--color-operator); }
 .verdict-icon {
   font-size: 1.6rem;
   line-height: 1;
