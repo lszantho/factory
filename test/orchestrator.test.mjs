@@ -23,6 +23,7 @@ import {
   findClosableSprint,
   findOperatorBlockedTask,
   describeDecision,
+  parseWorktreeList,
 } from '../orchestrator.mjs';
 
 // ---- quietSig ----------------------------------------------------------------------------
@@ -368,4 +369,57 @@ test('describeDecision: a non-string detail (e.g. dab-check-issues\' array) is n
 
 test('describeDecision: blocked with no detail at all is unchanged from before', () => {
   assert.equal(describeDecision({ action: 'blocked', reason: 'gh-not-authenticated' }), 'blocked — gh-not-authenticated');
+});
+
+// ---- parseWorktreeList -------------------------------------------------------------------
+//
+// Real `git worktree list --porcelain` output, captured from LeanMacroFeed on 2026-08-01 while
+// cleaning up the 12 worktrees the pre-amendment orchestrator had leaked.
+const WORKTREE_PORCELAIN = [
+  'worktree /Users/lucian/Works/LeanMacroFeed',
+  'HEAD 788239aa1f0f2a0f9a1d2c3b4e5f60718293a4b5',
+  'branch refs/heads/main',
+  '',
+  'worktree /Users/lucian/Works/LeanMacroFeed/.claude/worktrees/raw_upstream_payload_capture',
+  'HEAD c40a5b6d2e1f3a4b5c6d7e8f90a1b2c3d4e5f607',
+  'branch refs/heads/worktree-raw_upstream_payload_capture',
+  '',
+  'worktree /Users/lucian/Works/LeanMacroFeed/.claude/worktrees/detached-session',
+  'HEAD b8ecca5f1e2d3c4b5a6978869504132231405060',
+  'detached',
+  ''
+].join('\n');
+
+test('parseWorktreeList: finds the worktree path for a task branch', () => {
+  assert.equal(
+    parseWorktreeList(WORKTREE_PORCELAIN, 'worktree-raw_upstream_payload_capture'),
+    '/Users/lucian/Works/LeanMacroFeed/.claude/worktrees/raw_upstream_payload_capture'
+  );
+});
+
+test('parseWorktreeList: the main checkout is matched by its own branch, not treated specially', () => {
+  // Worth pinning: cleanupMergedWorktree must never be handed 'main', and if it ever were, the
+  // lookup would return the primary checkout. The guard is the caller (merged task branches only),
+  // so this documents the behaviour rather than pretending the parser filters it.
+  assert.equal(parseWorktreeList(WORKTREE_PORCELAIN, 'main'), '/Users/lucian/Works/LeanMacroFeed');
+});
+
+test('parseWorktreeList: a detached worktree never matches', () => {
+  assert.equal(parseWorktreeList(WORKTREE_PORCELAIN, 'detached'), null);
+});
+
+test('parseWorktreeList: an unknown branch yields null rather than a wrong path', () => {
+  assert.equal(parseWorktreeList(WORKTREE_PORCELAIN, 'worktree-never-existed'), null);
+});
+
+test('parseWorktreeList: a branch name that is a prefix of another does not match it', () => {
+  // `worktree-raw` must not match `worktree-raw_upstream_payload_capture` — a substring match here
+  // would remove the wrong worktree.
+  assert.equal(parseWorktreeList(WORKTREE_PORCELAIN, 'worktree-raw'), null);
+});
+
+test('parseWorktreeList: empty or missing input is null, never a throw', () => {
+  assert.equal(parseWorktreeList('', 'worktree-x'), null);
+  assert.equal(parseWorktreeList(WORKTREE_PORCELAIN, undefined), null);
+  assert.equal(parseWorktreeList(undefined, 'worktree-x'), null);
 });

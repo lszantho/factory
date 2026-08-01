@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved
+Approved — **amended 2026-08-01** (see [Amendment](#amendment-2026-08-01): the invariant covers *content*, not the worktree list).
 
 ## Context
 
@@ -38,3 +38,45 @@ Have the orchestrator commit its `dab complete` change to `main` and push it. Th
 - **A failed sync is a blocking condition.** Better to stop and surface it than to dispatch or merge against a stale board. Given the invariant, a failed `--ff-only` now signals a genuine anomaly (someone wrote to the checkout, or a real divergence), not routine drift.
 - **A new dependency on the developer persona.** If a developer forgets to run `dab complete`, the task's box stays unchecked on `main` after merge, and `dab next`/`findClosableEpic` keep treating it as open — visibly (the `--status` monitor would show the epic not advancing), and correctable, but it is now the persona's responsibility rather than the orchestrator's guarantee.
 - **Latent, pre-existing and unchanged by this ADR:** `decide()` can, in a narrow window (a tracked in-flight task whose `inFlightAction` returns `wait`, with no running session), fall through to `dab next` and re-return that same still-"active"-on-`main` task. This window is identical before and after this change (main reflects "done" only at merge either way). Worth hardening separately — e.g. the developer `dab claim`-ing the task, or `decide()` skipping `dab next` items already tracked in `state.json`.
+
+---
+
+## Amendment (2026-08-01)
+
+### What happened
+
+The invariant was stated as "it never writes to it," and that phrasing turned out to forbid something the reasoning behind it never intended: **removing the worktrees the factory itself created.**
+
+`gh pr merge --squash --delete-branch` deletes the head branch on the *remote*. Nothing deleted the local worktree or the local branch, and neither the `merge` nor the `reconcile-merged` path had any teardown. So every dispatched task leaked exactly one worktree and one local branch, permanently.
+
+Measured on `LeanMacroFeed` on 2026-08-01: **14 worktrees and 27 local branches**, of which 12 worktrees and 24 branches were finished work — eleven of them from the single `historical-observation-ledger` sprint. Every one had a merged PR, a clean tree, and a tip still present on the remote. They were pure noise, and they accumulated *during* the sprint rather than at the end of it, so the cost was continuous.
+
+The reconcile path is the larger leak of the two: a PR merged through GitHub's UI or a human `gh pr merge` never passes through this orchestrator's own merge action at all.
+
+### Decision
+
+**The invariant is scoped to content: the orchestrator never writes tracked files, never commits, and never pushes to the target checkout. It may remove worktrees and local branches belonging to work it dispatched, once their PR has merged.**
+
+Everything the original decision protects is preserved, because none of it is about the worktree list:
+
+- **The checkout cannot diverge.** Removing a linked worktree and deleting a merged local branch cannot move `main`, cannot dirty the working tree, and cannot create a commit. `--ff-only` remains unconditionally safe, which was the entire load-bearing reason for the invariant.
+- **Completion still flows through the PR.** Unchanged. Teardown happens strictly *after* a PR has merged, and touches no board state, no spec file, and no `dab` verb.
+- **"Someone wrote to the checkout" remains a genuine anomaly.** Teardown leaves the tracked tree byte-identical, so a failed `--ff-only` still means what the Consequences section says it means.
+
+Three constraints keep it honest:
+
+1. **Merged-PR only.** Teardown runs from the `merge` and `reconcile-merged` paths, both of which have already established `state === 'MERGED'` via `findPrForBranch`. Nothing is removed on a `CLOSED` PR — that work was deliberately not merged, and it is the only copy.
+2. **Never force.** A worktree with uncommitted changes is left in place and logged. Under the deletion the git default already refuses, so the guard is a better message, not the safety itself.
+3. **Never fatal.** Cleanup failure is logged and the tick continues. The merge already happened; failing the tick over housekeeping would turn a cosmetic problem into a stuck pipeline.
+
+The worktree is located by *querying* `git worktree list` for the task's branch, not by reconstructing the path from the task id — a directory name is a convention that can drift (interactive sessions append a hash suffix; the factory's do not), while the branch is the fact. This is [ADR 002](ADR_002_RECONCILE_STATE_FROM_REALITY.md)'s reconcile-from-reality principle applied to one more query.
+
+### Rejected alternative
+
+**Put teardown in `dab sprint close`.** Rejected twice over. `docs-as-board` manages markdown — its only git call anywhere is `git config user.name` to prefill a frontmatter field, and it does not assume it is inside a git repo at all. Giving it destructive power over a repo would require a git dependency *and* GitHub PR-state knowledge, because squash-merge makes "is this branch merged?" unanswerable from git alone (`git merge-base --is-ancestor` reported NOT-MERGED for all 12 genuinely-merged branches in the 2026-08-01 sweep). Separately, sprint close is the wrong moment: the worktrees accumulated throughout the sprint, so cleaning at the end would still have left them underfoot for its whole duration.
+
+### Consequences
+
+- **The leak is closed at its source.** The component that creates a worktree is the one that removes it, at the moment its PR merges.
+- **Pre-existing orphans are not swept.** This handles worktrees the orchestrator dispatches from now on. Anything already orphaned — including every worktree from an interactive session, which the orchestrator never knew about — still needs a manual pass.
+- **One narrow window remains.** A worktree whose session is somehow still running when its PR merges would have its directory removed underneath it. In practice a merged PR means the session finished, and the dirty-tree guard catches the case where it did not.

@@ -177,6 +177,77 @@ function repoHead(config) {
   }
 }
 
+// Picks the worktree checked out on `branch` from `git worktree list --porcelain` output, which
+// emits one blank-line-separated block per worktree: `worktree <path>`, `HEAD <sha>`, then
+// `branch refs/heads/<name>` — the last line absent when the worktree is detached.
+//
+// Matching on the branch is deliberate, rather than rebuilding the path from the task id: the
+// directory name is a convention (interactive sessions append a hash suffix, factory dispatches do
+// not), while the branch is a fact already recorded in state.json and trusted by findPrForBranch.
+// Same reconcile-from-reality principle as ADR 002.
+export function parseWorktreeList(raw, branch) {
+  if (!raw || !branch) return null;
+  for (const block of raw.split('\n\n')) {
+    const path = block.match(/^worktree (.+)$/m)?.[1];
+    const head = block.match(/^branch refs\/heads\/(.+)$/m)?.[1];
+    if (path && head === branch) return path;
+  }
+  return null;
+}
+
+function findWorktreeForBranch(config, branch) {
+  try {
+    const raw = execFileSync('git', ['-C', config.repoDir, 'worktree', 'list', '--porcelain'], { encoding: 'utf-8', timeout: 15_000 });
+    return parseWorktreeList(raw, branch);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Removes the worktree and local branch a merged task leaves behind.
+ *
+ * `gh pr merge --delete-branch` deletes the head branch on the *remote* only, and nothing ever
+ * removed the local side — so before this, every dispatched task leaked one worktree and one local
+ * branch permanently (14 worktrees / 27 branches had accumulated on LeanMacroFeed by 2026-08-01).
+ * Permitted by ADR 008's 2026-08-01 amendment, which scopes that ADR's read-only invariant to
+ * *content*: this writes no tracked file, creates no commit, and cannot make the checkout diverge,
+ * so `--ff-only` stays unconditionally safe.
+ *
+ * Callers must have established the PR is MERGED. Never runs on a CLOSED PR — that work was
+ * deliberately not merged and the local branch may be its only copy.
+ *
+ * Never throws, and never forces. Housekeeping must not turn an already-successful merge into a
+ * stuck tick, and a worktree with uncommitted work is left alone for a human to look at.
+ */
+function cleanupMergedWorktree(config, branch) {
+  if (!branch) return { ok: false, reason: 'no-branch' };
+  const result = { branch, worktreeRemoved: false, branchDeleted: false };
+  try {
+    const worktreePath = findWorktreeForBranch(config, branch);
+    if (worktreePath) {
+      const dirty = execFileSync('git', ['-C', worktreePath, 'status', '--porcelain'], { encoding: 'utf-8', timeout: 15_000 }).trim();
+      if (dirty) {
+        // `git worktree remove` would refuse this anyway; catching it here turns an opaque git
+        // error into a log line naming the branch, and leaves the uncommitted work in place.
+        return { ...result, ok: false, reason: 'worktree-dirty', worktreePath };
+      }
+      execFileSync('git', ['-C', config.repoDir, 'worktree', 'remove', worktreePath], { encoding: 'utf-8', timeout: 30_000 });
+      result.worktreeRemoved = true;
+      result.worktreePath = worktreePath;
+    }
+    // `-D`, not `-d`: every merge here is a squash merge, so the branch's own commits never appear
+    // in main's history and `-d`'s merged-check rejects a branch that demonstrably landed. Same
+    // reasoning findPrForBranch documents for not using a commit-SHA check.
+    execFileSync('git', ['-C', config.repoDir, 'branch', '-D', branch], { encoding: 'utf-8', timeout: 15_000 });
+    result.branchDeleted = true;
+    execFileSync('git', ['-C', config.repoDir, 'worktree', 'prune'], { encoding: 'utf-8', timeout: 15_000 });
+    return { ...result, ok: true };
+  } catch (err) {
+    return { ...result, ok: false, reason: String(err?.stderr || err?.message || err).trim().split('\n').slice(-2).join(' ') };
+  }
+}
+
 function claudeAgentsJson(config) {
   try {
     return JSON.parse(execFileSync(config.paths.claude, ['agents', '--json', '--all'], { encoding: 'utf-8', timeout: 15_000 }));
@@ -1156,9 +1227,13 @@ function main() {
       // checked / the task archived inside the worktree and reviewed, so it lands on main atomically
       // with the merge (ADR 008). The orchestrator only reads and fast-forwards this checkout, never
       // writes to it; the next tick's sync reflects the completion.
+      // Read the branch before dropping the state entry — it is the only record of which worktree
+      // this task owns, and `--delete-branch` above removed only the remote side.
+      const mergedBranch = state.tasks[decision.taskId]?.branch;
       delete state.tasks[decision.taskId];
       flushQuiet(state);
-      logDecision({ decisionId, type: 'merged', taskId: decision.taskId, prNumber: decision.prNumber });
+      const cleanup = cleanupMergedWorktree(config, mergedBranch);
+      logDecision({ decisionId, type: 'merged', taskId: decision.taskId, prNumber: decision.prNumber, cleanup });
       notify('Factory: merged', `${repoConfigName}: ${decision.taskId} merged and archived.`);
       return;
     }
@@ -1171,9 +1246,13 @@ function main() {
       // redispatching over already-finished work.
       // Completion rode in with the merged PR (ADR 008) — nothing to mark done here. Just catch
       // state up to the reality that this PR already merged (through whatever channel).
+      // This is the larger of the two worktree leaks: a PR merged in GitHub's UI or by a human
+      // `gh pr merge` never reaches the 'merge' action above, so its worktree was never seen again.
+      const reconciledBranch = state.tasks[decision.taskId]?.branch;
       delete state.tasks[decision.taskId];
       flushQuiet(state);
-      logDecision({ decisionId, type: 'reconciled-merged', taskId: decision.taskId, prNumber: decision.prNumber });
+      const reconcileCleanup = cleanupMergedWorktree(config, reconciledBranch);
+      logDecision({ decisionId, type: 'reconciled-merged', taskId: decision.taskId, prNumber: decision.prNumber, cleanup: reconcileCleanup });
       return;
     }
 
