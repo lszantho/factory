@@ -267,6 +267,33 @@ function claudeAgentsJson(config) {
   }
 }
 
+/**
+ * The terminal `state` `claude agents --json` reports for one session, matched by **sessionId**
+ * rather than name — a name is reused across every retry of a task, so matching on it would read
+ * some earlier attempt's outcome.
+ *
+ * Reading this at all is the fix for a real loop. A session that reports `failed` wrote no
+ * transcript, created no worktree, and produced nothing — which is indistinguishable, to the
+ * transcript-mtime liveness check, from a session that is merely quiet while thinking. Nothing
+ * consumed this field, so `inFlightAction` classified every failure as "no PR yet" and redispatched
+ * on the staleness timer. Observed 2026-08-01: 8 consecutive failed dispatches on one task over 3
+ * hours, 11/20 of the dispatch budget spent, zero progress, and the tick reporting `wait` the whole
+ * time.
+ */
+export function pickSessionState(agents, sessionId) {
+  if (!sessionId || !Array.isArray(agents)) return null;
+  return agents.find((s) => s?.sessionId === sessionId)?.state ?? null;
+}
+
+function sessionState(config, sessionId) {
+  return pickSessionState(claudeAgentsJson(config), sessionId);
+}
+
+/** How many failed dispatches a task gets before it stops being retried and becomes the operator's
+ *  problem. One retry covers a transient failure; a second identical failure is a real defect and
+ *  redispatching it just spends budget to reproduce it. */
+const MAX_FAILED_DISPATCHES = 2;
+
 // A session stuck on an interactive prompt it has no TTY to answer (confirmed cause: hitting
 // Claude's own usage limit and dropping into `/rate-limit-options`, see factory's operational
 // gotchas doc) is invisible to the transcript-mtime liveness check above by design — the
@@ -595,6 +622,36 @@ function inFlightAction(config, taskId, task, titleHint) {
     if (hasRunningSession(config, sessionName)) {
       return { action: 'wait', reason: 'session-running', taskId };
     }
+
+    // A session that reported `failed` is terminal — there is nothing to wait for, so this is
+    // decided before the staleness timer rather than after it. Each failed session is counted once
+    // (keyed on its own id) so a tick that merely re-observes the same failure does not inflate the
+    // count toward the cap.
+    if (sessionState(config, task.sessionId) === 'failed') {
+      if (task.countedFailureSessionId !== task.sessionId) {
+        task.failedDispatches = (task.failedDispatches ?? 0) + 1;
+        task.countedFailureSessionId = task.sessionId;
+      }
+      if ((task.failedDispatches ?? 0) >= MAX_FAILED_DISPATCHES) {
+        return {
+          action: 'blocked',
+          reason: 'session-failed',
+          taskId,
+          detail: `${task.failedDispatches} dispatches reported state=failed with no PR. Not retrying — a second identical failure is a defect, not bad luck. Check \`claude agents --json --all\` for session "${sessionName}" (${(sessionName ?? '').length} chars; names at 83 have been observed failing where 81 succeeded).`
+        };
+      }
+      return {
+        action: 'dispatch',
+        role: task.lastRole ?? 'developer',
+        taskId,
+        sessionName,
+        worktree: task.worktreeName,
+        reason: 'retry-session-failed',
+        prompt: `Resume the task "${titleHint ?? taskId}" on branch ${task.branch} — the previous dispatch's session failed before producing a PR. Finish the work and open a PR.`,
+        onDispatched: () => { task.lastDispatchedAt = Date.now(); }
+      };
+    }
+
     if (stale) {
       return {
         action: 'dispatch',
@@ -611,6 +668,12 @@ function inFlightAction(config, taskId, task, titleHint) {
   }
 
   task.prNumber = pr.number;
+  // A PR exists, so whatever failed earlier was transient. Clear the counter, or an unrelated
+  // failure later in this task's life would trip the cap on its first occurrence.
+  if (task.failedDispatches) {
+    task.failedDispatches = 0;
+    task.countedFailureSessionId = null;
+  }
 
   // The review loop keys off the reviewed commit SHA (`headRefOid`). This is what lets the
   // orchestrator tell "a fix was pushed, re-review it" apart from "rejected again," and count

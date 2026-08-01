@@ -24,6 +24,7 @@ import {
   findOperatorBlockedTask,
   describeDecision,
   parseWorktreeList,
+  pickSessionState,
 } from '../orchestrator.mjs';
 
 // ---- quietSig ----------------------------------------------------------------------------
@@ -422,4 +423,48 @@ test('parseWorktreeList: empty or missing input is null, never a throw', () => {
   assert.equal(parseWorktreeList('', 'worktree-x'), null);
   assert.equal(parseWorktreeList(WORKTREE_PORCELAIN, undefined), null);
   assert.equal(parseWorktreeList(undefined, 'worktree-x'), null);
+});
+
+// ---- pickSessionState --------------------------------------------------------------------
+//
+// Shape captured from `claude agents --json --all` on 2026-08-01, while diagnosing the loop this
+// function exists to end: eight dispatches of one task, every session reporting state=failed,
+// nothing reading the field.
+const AGENTS = [
+  { id: 'a539873a', sessionId: 'a539873a-0000-0000-0000-000000000001', name: 'factory-developer-short_task', kind: 'background', state: 'done' },
+  { id: '6b21eb5b', sessionId: '6b21eb5b-fb55-46b2-be0b-0b833807405d', name: 'factory-developer-add_batch_identity_and_contract_version_to_the_published_payloads', kind: 'background', state: 'failed' },
+  { id: '4df1614f', sessionId: '4df1614f-8e1c-48d0-8f01-d844319ee6dd', name: 'factory-developer-add_batch_identity_and_contract_version_to_the_published_payloads', kind: 'background', state: 'failed' },
+  { id: 'nostate', sessionId: 'nostate-0000-0000-0000-000000000002', name: 'factory-reviewer-x', kind: 'background' }
+];
+
+test('pickSessionState: reads the terminal state of the matching session', () => {
+  assert.equal(pickSessionState(AGENTS, '6b21eb5b-fb55-46b2-be0b-0b833807405d'), 'failed');
+  assert.equal(pickSessionState(AGENTS, 'a539873a-0000-0000-0000-000000000001'), 'done');
+});
+
+test('pickSessionState: matches on sessionId, never on name', () => {
+  // The two failed records share a name — every retry of a task reuses it. Matching by name would
+  // read whichever attempt happened to be found first, which is the wrong attempt by construction.
+  assert.equal(pickSessionState(AGENTS, '4df1614f-8e1c-48d0-8f01-d844319ee6dd'), 'failed');
+  assert.equal(
+    pickSessionState(AGENTS, 'factory-developer-add_batch_identity_and_contract_version_to_the_published_payloads'),
+    null
+  );
+});
+
+test('pickSessionState: an unknown session is null, not undefined or a throw', () => {
+  assert.equal(pickSessionState(AGENTS, 'never-dispatched'), null);
+});
+
+test('pickSessionState: a record with no state field yields null rather than undefined', () => {
+  assert.equal(pickSessionState(AGENTS, 'nostate-0000-0000-0000-000000000002'), null);
+});
+
+test('pickSessionState: missing sessionId or a non-array agent list is null, never a throw', () => {
+  assert.equal(pickSessionState(AGENTS, undefined), null);
+  assert.equal(pickSessionState(AGENTS, null), null);
+  assert.equal(pickSessionState(undefined, 'x'), null);
+  assert.equal(pickSessionState(null, 'x'), null);
+  // `claudeAgentsJson` returns [] when the CLI call fails; that must read as "unknown", not failed.
+  assert.equal(pickSessionState([], '6b21eb5b-fb55-46b2-be0b-0b833807405d'), null);
 });
