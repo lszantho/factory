@@ -236,11 +236,22 @@ function cleanupMergedWorktree(config, branch) {
       result.worktreeRemoved = true;
       result.worktreePath = worktreePath;
     }
-    // `-D`, not `-d`: every merge here is a squash merge, so the branch's own commits never appear
-    // in main's history and `-d`'s merged-check rejects a branch that demonstrably landed. Same
-    // reasoning findPrForBranch documents for not using a commit-SHA check.
-    execFileSync('git', ['-C', config.repoDir, 'branch', '-D', branch], { encoding: 'utf-8', timeout: 15_000 });
-    result.branchDeleted = true;
+    // An already-deleted branch is the goal state, not a failure — this path is reached whenever a
+    // human cleaned up by hand, or a previous tick got partway. Check before deleting so the
+    // common case reports ok instead of surfacing `branch not found` as an error every tick.
+    let branchExists = true;
+    try {
+      execFileSync('git', ['-C', config.repoDir, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { encoding: 'utf-8', timeout: 15_000 });
+    } catch {
+      branchExists = false;
+    }
+    if (branchExists) {
+      // `-D`, not `-d`: every merge here is a squash merge, so the branch's own commits never appear
+      // in main's history and `-d`'s merged-check rejects a branch that demonstrably landed. Same
+      // reasoning findPrForBranch documents for not using a commit-SHA check.
+      execFileSync('git', ['-C', config.repoDir, 'branch', '-D', branch], { encoding: 'utf-8', timeout: 15_000 });
+      result.branchDeleted = true;
+    }
     execFileSync('git', ['-C', config.repoDir, 'worktree', 'prune'], { encoding: 'utf-8', timeout: 15_000 });
     return { ...result, ok: true };
   } catch (err) {
