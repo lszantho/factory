@@ -468,3 +468,29 @@ test('pickSessionState: missing sessionId or a non-array agent list is null, nev
   // `claudeAgentsJson` returns [] when the CLI call fails; that must read as "unknown", not failed.
   assert.equal(pickSessionState([], '6b21eb5b-fb55-46b2-be0b-0b833807405d'), null);
 });
+
+// ---- ciWaitReason vs the red-CI fixer path ------------------------------------------------
+//
+// Regression cover for 2026-08-02: a task's PR went red and the tick reported `wait — ci-red`
+// indefinitely, because nothing dispatched on red CI. `ciWaitReason` still names the condition for
+// the non-red cases; red is now handled before the fallthrough ever reaches it.
+
+test('ciWaitReason: still distinguishes no-CI, pending and review states', () => {
+  const red = { statusCheckRollup: [{ conclusion: 'FAILURE' }] };
+  const pending = { statusCheckRollup: [{ conclusion: '' }] };
+  const none = { statusCheckRollup: [] };
+  assert.equal(ciState(red), 'red');
+  assert.equal(ciState(pending), 'pending');
+  assert.equal(ciState(none), 'none');
+});
+
+test('describeDecision: ci-red-after-fix renders its detail so the log says what to run', () => {
+  const text = describeDecision({
+    action: 'blocked',
+    reason: 'ci-red-after-fix',
+    taskId: 'refine_release_id_and_trigger_timing',
+    detail: 'CI is still red on abc1234 after a fixer dispatch.'
+  });
+  assert.match(text, /blocked — ci-red-after-fix \("refine_release_id_and_trigger_timing"\)/);
+  assert.match(text, /still red on abc1234/);
+});

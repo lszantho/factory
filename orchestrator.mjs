@@ -761,6 +761,41 @@ function inFlightAction(config, taskId, task, titleHint) {
     };
   }
 
+  // Red CI on a PR this factory opened will never go green on its own — nothing is running, and
+  // no other path here dispatches on it. Before this, `ciWaitReason` named the condition and the
+  // tick fell through to `wait`, so the task parked forever. Observed 2026-08-02: a smoke-test
+  // harness held a stale copy of an id rule, its PR went red, and the sprint stopped — while the
+  // status line reported patience.
+  //
+  // Same shape as the `state: failed` blindness fixed in 497f45a: a terminal condition read as a
+  // transient one. One fixer dispatch per failing commit — keyed on the head SHA so a push that
+  // does not fix it cannot loop — then it becomes the operator's.
+  if (ciState(pr) === 'red') {
+    if (task.ciFixedSha === head) {
+      return {
+        action: 'blocked',
+        reason: 'ci-red-after-fix',
+        taskId,
+        prNumber: pr.number,
+        detail: `CI is still red on ${shortHead} after a fixer dispatch. Not retrying — a second failure on the same commit is a defect, not flakiness. \`gh pr checks ${pr.number}\``
+      };
+    }
+    const sessionName = `factory-developer-${taskId}-cifix-${shortHead}`;
+    if (hasRunningSession(config, sessionName)) {
+      return { action: 'wait', reason: 'session-running', taskId };
+    }
+    return {
+      action: 'dispatch',
+      role: 'developer',
+      taskId,
+      sessionName,
+      worktree: task.worktreeName,
+      reason: 'fix-red-ci',
+      prompt: `CI is failing on PR #${pr.number} for task "${titleHint ?? taskId}". Read the failure with \`gh pr checks ${pr.number}\` and \`gh run view --log-failed\`, fix the cause in this worktree, and push to the same branch (do NOT open a new PR). If the failure is not caused by this PR — for example the base branch is already broken — say so in a PR comment and stop rather than papering over it.`,
+      onDispatched: () => { task.ciFixedSha = head; task.lastDispatchedAt = Date.now(); }
+    };
+  }
+
   // Say *which* of the several "not ready yet" conditions this is. The old single reason,
   // 'ci-pending-or-no-review-yet', covered a transient wait and a permanently-stuck repo equally
   // well, so a disabled CI workflow was indistinguishable from patience.
