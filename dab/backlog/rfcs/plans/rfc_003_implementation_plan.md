@@ -1,6 +1,6 @@
 # RFC 003 — Implementation plan
 
-Companion to [RFC 003: Tick cadence](RFC_003_EVENT_DRIVEN_TICKS.md). This is the concrete build plan: exact files, functions, config, and code sketches, phased so the cheap high-confidence work lands first and the event-driven machinery is gated behind a measurement.
+Companion to [RFC 003: Tick cadence](../rfc_003_event_driven_ticks.md). This is the concrete build plan: exact files, functions, config, and code sketches, phased so the cheap high-confidence work lands first and the event-driven machinery is gated behind a measurement.
 
 **Guiding order (from the RFC):** measure → cheap path (dedup + heartbeat + fail-fast + faster interval) → *only if needed* event-driven triggers. Phases 0–1 are do-regardless; Phase 2 is conditional on Phase 0's data.
 
@@ -35,7 +35,7 @@ All in `orchestrator.mjs` + the plist. No new services, no network trigger. Make
 
 ### 1.1 Heartbeat + transition-only logging
 
-**Problem:** `logDecision` ([orchestrator.mjs:54](../../orchestrator.mjs)) appends + `console.log`s on *every* tick, so a fast cadence buries transitions under `wait`/`idle` heartbeats.
+**Problem:** `logDecision` ([orchestrator.mjs:54](../../../../orchestrator.mjs)) appends + `console.log`s on *every* tick, so a fast cadence buries transitions under `wait`/`idle` heartbeats.
 
 **State additions** (in `state.json`, initialized in `loadState` default):
 - `lastTickAt` — ISO timestamp, written every tick.
@@ -123,7 +123,7 @@ if (canFastSkip(config, state)) {
 ```
 
 **Correctness notes (mirror in a code comment):**
-- Relies on `task.prNumber`, which `inFlightAction` sets once a PR is first seen ([orchestrator.mjs:322](../../orchestrator.mjs)). Pre-PR it's unset → eligible to skip; once a PR exists it's set forever → never skip (CI/review are GitHub-side, must poll).
+- Relies on `task.prNumber`, which `inFlightAction` sets once a PR is first seen ([orchestrator.mjs:322](../../../../orchestrator.mjs)). Pre-PR it's unset → eligible to skip; once a PR exists it's set forever → never skip (CI/review are GitHub-side, must poll).
 - Self-correcting: when the dev finishes and the transcript goes quiet for `T` seconds, `sessionActivelyWriting` flips false → next tick runs fully → finds the PR within ~`T` of completion.
 - Only ever fast-skips **at the WIP cap**; under the cap it always runs `decide()` so new work can start. Safe for `maxConcurrentTasks > 1`.
 - First tick after dispatch (transcript not yet created) → `false` → full tick; harmless.
@@ -158,7 +158,7 @@ env: { ...process.env, FACTORY_DISPATCH: '1', FACTORY_REPO: repoConfigName, ...r
 
 ### 2.2 Coalescing trigger endpoint (`server.mjs`)
 
-Replace the single `tickInProgress` boolean ([server.mjs:21](../../server.mjs)) with **per-repo** run/rerun tracking so a hit during a running tick queues *exactly one* follow-up (a dropped trigger = a dropped transition):
+Replace the single `tickInProgress` boolean ([server.mjs:21](../../../../server.mjs)) with **per-repo** run/rerun tracking so a hit during a running tick queues *exactly one* follow-up (a dropped trigger = a dropped transition):
 
 ```js
 const running = new Set();   // repos with a tick in flight

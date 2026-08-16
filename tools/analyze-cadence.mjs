@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Phase 0 of RFC 003 (docs/rfcs/RFC_003_EVENT_DRIVEN_TICKS.md): attribute a task's wall-clock
+// Phase 0 of RFC 003 (dab/backlog/rfcs/rfc_003_event_driven_ticks.md): attribute a task's wall-clock
 // to agent-active time vs. wait-on-something time, purely by reading the orchestrator's own
 // decision log. Read-only — never touches state.json, never dispatches anything.
 // Usage: node tools/analyze-cadence.mjs <repoConfigName> [taskId]

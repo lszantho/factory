@@ -2,11 +2,11 @@
 
 ## Status
 
-**Proposed — not started.** Written 2026-08-16 from a single evening's incidents on the `leanmacrofeed` repo, in which three separate failures cost roughly six hours of operator attention and burned CI minutes on work that could never succeed. None of them is a new design problem. All three are **the same defect [ADR 002](../architecture/adr/ADR_002_RECONCILE_STATE_FROM_REALITY.md) already names** — *"the failure mode of this design is not stale memory, it's partial observation"* — surviving in three places the ADR's original fix did not reach.
+**Proposed — not started.** Written 2026-08-16 from a single evening's incidents on the `leanmacrofeed` repo, in which three separate failures cost roughly six hours of operator attention and burned CI minutes on work that could never succeed. None of them is a new design problem. All three are **the same defect [ADR 002](../../../docs/architecture/adr/ADR_002_RECONCILE_STATE_FROM_REALITY.md) already names** — *"the failure mode of this design is not stale memory, it's partial observation"* — surviving in three places the ADR's original fix did not reach.
 
 This RFC proposes no new architecture. It proposes finishing an approved one.
 
-## Motivation
+## Context & Motivation
 
 ADR 002 decided that the orchestrator is level-triggered: it stores no lifecycle state and re-derives its next action from observed reality every tick. `state.json` persists only the irreducible dispatch-time association of task → branch → role, and — the ADR is explicit — *"even this is treated as a hint, not an authority."*
 
@@ -16,7 +16,7 @@ Three other places do not honour it. Each treats a remembered value as authorita
 
 ### 2.1 The WIP check reads `state.json` as the authority on what is in flight
 
-[orchestrator.mjs](../../orchestrator.mjs), in `decide()`:
+[orchestrator.mjs](../../../orchestrator.mjs), in `decide()`:
 
 ```js
 const inFlightIds = Object.keys(state.tasks).filter((id) => state.tasks[id].branch);
@@ -59,7 +59,7 @@ Three incidents in one evening, one shape:
 
 Note also that `ci-not-reporting` is a **`wait`**, not a `blocked`. It never notifies. §2.2's dead PR would still be sitting there.
 
-## Proposed changes
+## Proposed Architecture & Design
 
 Four, in descending value. Each is small and independently shippable.
 

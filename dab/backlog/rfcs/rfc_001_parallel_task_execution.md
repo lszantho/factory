@@ -4,7 +4,7 @@
 
 **Proposed.** The keystone (WIP cap + in-flight dedup) is implemented and shipped at `maxConcurrentTasks: 1` (single-track, no behaviour change). Everything beyond that — actually running independent tasks concurrently — is future work gated on a `dab` readiness model. This RFC records the target design so it can be built deliberately.
 
-## Motivation
+## Context & Motivation
 
 Today the factory works one task at a time. Throughput is bounded by the slowest step of a single task's lifecycle (implement → CI → review → merge), even when the backlog holds several tasks with no dependency on each other. If three independent tasks are ready, there's no reason a developer session can't be working all three at once. The goal is to let independent work proceed in parallel, capped by an explicit limit, without weakening any of the properties that make the current system trustworthy.
 
@@ -16,7 +16,7 @@ Today the factory works one task at a time. Throughput is bounded by the slowest
 
 ## Background: how coordination works today
 
-Three facts from the current design ([PRINCIPLES](../architecture/PRINCIPLES.md), [ADR 001](../architecture/adr/ADR_001_DETERMINISTIC_ORCHESTRATOR.md), [ADR 002](../architecture/adr/ADR_002_RECONCILE_STATE_FROM_REALITY.md)) make parallelism largely a matter of *removing a bottleneck*, not adding a mechanism:
+Three facts from the current design ([PRINCIPLES](../../../docs/architecture/PRINCIPLES.md), [ADR 001](../../../docs/architecture/adr/ADR_001_DETERMINISTIC_ORCHESTRATOR.md), [ADR 002](../../../docs/architecture/adr/ADR_002_RECONCILE_STATE_FROM_REALITY.md)) make parallelism largely a matter of *removing a bottleneck*, not adding a mechanism:
 
 1. **The orchestrator is the sole dispatcher.** Nothing else starts work. There is exactly one place assignment decisions are made.
 2. **`state.json` is the assignment ledger.** Every in-flight task is recorded there with its branch. The orchestrator already knows, at all times, what is in flight and what isn't.
@@ -24,7 +24,7 @@ Three facts from the current design ([PRINCIPLES](../architecture/PRINCIPLES.md)
 
 Because there is one dispatcher and one ledger, **collision-free assignment is free** — no two workers can be given the same task, because a single deterministic process hands out the work and records it. This is the crux of the decision below.
 
-## Proposal
+## Proposed Architecture & Design
 
 ### 1. Push, not pull — the orchestrator assigns
 
@@ -45,14 +45,14 @@ flowchart LR
     C -.-> M
 ```
 
-Under a scheduled loop ([ADR 006](../architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md)'s deferred next gate), this happens automatically; the loop starts new ready work each tick until it hits the cap, and the in-flight loop keeps every started task moving.
+Under a scheduled loop ([ADR 006](../../../docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md)'s deferred next gate), this happens automatically; the loop starts new ready work each tick until it hits the cap, and the in-flight loop keeps every started task moving.
 
 ### 3. The keystone (implemented)
 
 Two changes, both shipped, both no-ops at `maxConcurrentTasks: 1`:
 
 - **WIP cap** (`config.maxConcurrentTasks`, default 1): the orchestrator only *starts* new work while the count of in-flight tasks (tracked in `state.json` with a branch) is under the cap. Already-started work always keeps advancing — the cap gates *starting*, not *finishing*. Distinct from `budget-guard`, which caps dispatch *rate*, not concurrent *count*.
-- **In-flight dedup**: the new-work paths never re-dispatch a task already tracked in flight (they return `wait: next-task-already-in-flight`). This also fixes the pre-existing latent bug noted in [ADR 008](../architecture/adr/ADR_008_READ_ONLY_CHECKOUT_COMPLETION_IN_PR.md) (a task still `active` on `main` while its PR is open being re-picked by `dab next`).
+- **In-flight dedup**: the new-work paths never re-dispatch a task already tracked in flight (they return `wait: next-task-already-in-flight`). This also fixes the pre-existing latent bug noted in [ADR 008](../../../docs/architecture/adr/ADR_008_READ_ONLY_CHECKOUT_COMPLETION_IN_PR.md) (a task still `active` on `main` while its PR is open being re-picked by `dab next`).
 
 At the default cap of 1 this reproduces today's single-track behaviour exactly — but *correctly* (via an explicit cap) rather than accidentally (via `dab next` re-returning the in-flight task and being skipped by the running-session guard).
 
@@ -86,4 +86,4 @@ Raising the cap above 1 does nothing useful yet, because of one missing piece:
 
 1. **Done:** keystone (WIP cap + dedup) at `maxConcurrentTasks: 1`. No behaviour change; latent bug fixed.
 2. Build the `dab` readiness model + `decide()` multi-candidate selection + conflict handling.
-3. Raise the cap incrementally (2, then higher) against a real backlog of independent tasks, watching reviewer throughput, cost, and machine load — the same "relax a gate only once it's earned" posture as [ADR 006](../architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md).
+3. Raise the cap incrementally (2, then higher) against a real backlog of independent tasks, watching reviewer throughput, cost, and machine load — the same "relax a gate only once it's earned" posture as [ADR 006](../../../docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md).

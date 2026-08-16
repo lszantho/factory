@@ -4,9 +4,9 @@
 
 **Proposed — Phase 1 shipped, Phase 2 (event-driven Stop-hook) deferred.** The question this RFC answers is *sequencing*: before building any event-driven trigger machinery (hooks, webhooks, a coalescing server endpoint), establish whether simply **running the existing tick more often** — e.g. every minute instead of every 15 — is good enough, and what it actually costs. Faster polling is a one-line plist change with no new moving parts; the event-driven designs are only worth their complexity if this cheap option is shown to be inadequate. So this RFC leads with the cost analysis of frequent polling and treats event-driven triggering as one option the study may or may not reach for. **Phase 1 landed** (`f7a3dce`, `eec52d1`): quiet-tick log dedup + coalescing, a `state.lastTickAt` heartbeat, a fail-fast pre-check (`canFastSkip`) that skips a tick when every in-flight task is pre-PR and its session transcript is actively being written, `tools/analyze-cadence.mjs`, and the factory's first-ever tests. Phase 1.4 (actually bumping launchd's `StartInterval`) and Phase 2 remain deliberately deferred.
 
-## Motivation
+## Context & Motivation
 
-A tick is a single-shot reconcile: `sync → decide → one action → exit` ([orchestrator.mjs](../../orchestrator.mjs), [ADR 001](../architecture/adr/ADR_001_DETERMINISTIC_ORCHESTRATOR.md)). One task's lifecycle is a *chain*:
+A tick is a single-shot reconcile: `sync → decide → one action → exit` ([orchestrator.mjs](../../../orchestrator.mjs), [ADR 001](../../../docs/architecture/adr/ADR_001_DETERMINISTIC_ORCHESTRATOR.md)). One task's lifecycle is a *chain*:
 
 ```
 dispatch dev → dev opens PR → CI green → dispatch reviewer → review submitted → merge
@@ -70,7 +70,7 @@ Even at one tick every 10 seconds we're well under budget. **Rate limit is not t
 
 **GitHub secondary/abuse limits** — the ones that bite bursty automation — are ~2,000 GraphQL points/min and ≤100 concurrent requests. A tick issues ≤3 sequential calls, once a minute: **~3 points/min, 1 concurrent.** Three orders of magnitude clear. Writes (`gh pr merge`) fall under the content-creation secondary limit (~500/hr); merges happen a handful of times a day. Fine.
 
-**Reviewer identity is separate and unaffected.** `ls-reviewer`'s token ([ADR 004](docs/architecture/adr/ADR_004_DISTINCT_REVIEWER_IDENTITY.md)) has its *own* 5,000/hr budget and is only used by the reviewer *agent's* `gh` calls — never by the tick itself. Tick cadence doesn't touch it.
+**Reviewer identity is separate and unaffected.** `ls-reviewer`'s token ([ADR 004](../../../docs/architecture/adr/ADR_004_DISTINCT_REVIEWER_IDENTITY.md)) has its *own* 5,000/hr budget and is only used by the reviewer *agent's* `gh` calls — never by the tick itself. Tick cadence doesn't touch it.
 
 **git fetch.** 60 small fetches/hour is nothing; GitHub imposes no per-hour git limit that normal polling approaches.
 
@@ -80,7 +80,7 @@ Even at one tick every 10 seconds we're well under budget. **Rate limit is not t
 
 ### 2. Log noise
 
-`logDecision` appends one JSONL line **and** `console.log`s on **every** tick, whatever the outcome ([orchestrator.mjs](../../orchestrator.mjs)). At 15-min cadence that's ~96 lines/day; at 1/min it's **~1,440/day**, the overwhelming majority `wait`/`idle` heartbeats that bury the handful of real transitions. The audit trail degrades from a state *timeline* into a poll *log*.
+`logDecision` appends one JSONL line **and** `console.log`s on **every** tick, whatever the outcome ([orchestrator.mjs](../../../orchestrator.mjs)). At 15-min cadence that's ~96 lines/day; at 1/min it's **~1,440/day**, the overwhelming majority `wait`/`idle` heartbeats that bury the handful of real transitions. The audit trail degrades from a state *timeline* into a poll *log*.
 
 Fixes, primary first:
 
@@ -96,7 +96,7 @@ The user's proposal: *if a session is in progress, bail before calling `gh`/`cla
 
 **Why it's correct (in this flow).** A tick's expensive calls exist to detect two kinds of change since the last tick: **(a)** a local agent finished or pushed, and **(b)** GitHub-side CI/review moved. For an in-flight task with **no PR yet**, (b) is *impossible* — no PR ⇒ no CI ⇒ no review. And in this factory the developer opens the PR at the very *end* of its session (prompt: implement → test → push → **then** open PR). So while a developer session is genuinely active, `gh pr list` is *guaranteed* to return "no PR" — every one of those calls is pure waste. Fail-fast: while the session is actively working and has no PR, skip `gh` (and skip re-deriving anything).
 
-**The caveat — do not reuse the 30-minute liveness window.** The existing liveness signal (`sessionRecentlyActive`, a 30-min transcript-mtime window, [ADR 005](docs/architecture/adr/ADR_005_LIVENESS_FROM_TRANSCRIPT_MTIME.md)) is deliberately *lagging*: it calls a session alive for 30 min after its last transcript write, so a briefly-paused agent isn't re-dispatched over. If fail-fast used that same window, it would skip the `gh` check for up to **30 minutes after the agent actually finished and opened the PR** — a latency *regression* worse than the 15-min poll it replaces. The two needs are opposite:
+**The caveat — do not reuse the 30-minute liveness window.** The existing liveness signal (`sessionRecentlyActive`, a 30-min transcript-mtime window, [ADR 005](../../../docs/architecture/adr/ADR_005_LIVENESS_FROM_TRANSCRIPT_MTIME.md)) is deliberately *lagging*: it calls a session alive for 30 min after its last transcript write, so a briefly-paused agent isn't re-dispatched over. If fail-fast used that same window, it would skip the `gh` check for up to **30 minutes after the agent actually finished and opened the PR** — a latency *regression* worse than the 15-min poll it replaces. The two needs are opposite:
 
 | Threshold | Purpose | Wants to be |
 | --- | --- | --- |
@@ -109,15 +109,15 @@ So fail-fast needs its **own short threshold**: transcript touched within ~T sec
 
 **Its limit (and where events come back in).** Fail-fast only helps the **no-PR-yet** window. Once a PR exists, CI/review changes are GitHub-side with no local proxy, so the tick *must* call `gh` to see them — there's no way to fail-fast that window by polling. That is precisely the window the event-driven options target (Options 4–5). Fail-fast and events are **complementary**: fail-fast removes waste *during agent work*; events remove latency *during GitHub waits*.
 
-## Options considered (the study)
+## Alternatives considered (the study)
 
 1. **Shorten `StartInterval` (the baseline under analysis).** One-line plist change, no new parts. Drops worst-case per-step latency from 15 min → the interval. §1 shows the API cost is negligible; §2 and §3 remove the noise/waste. **Strongest first move.** Combine with #2 and #3.
 2. **Log transitions, not polls (§2).** Makes a fast cadence non-noisy; independently worth doing. Low risk.
 3. **Fail-fast short-circuit (§3).** Makes a fast cadence cheap by skipping the expensive path while an agent works. Needs the *short* threshold and (ideally) the recorded-cwd optimization. Medium, self-contained.
-4. **Event-driven trigger on agent completion (`Stop` hook).** A `Stop` hook in the target repo's `.claude/settings.json`, gated on `FACTORY_DISPATCH=1`, pokes a coalescing `POST /api/trigger/:repo` in [server.mjs](../../server.mjs) so an agent finishing fires the *next* tick in seconds rather than at the next interval. Removes latency in the window fail-fast can't (agent→next-stage). Cost: confirm `Stop` fires in `--bg` (**O1**); a new coalescing endpoint (per-repo lock; a *dropped* trigger = a dropped transition, so it must coalesce, not 409); route launchd through the same lock. **Only worth building if faster polling's latency floor proves too high.** Deferred pending the measurement below.
+4. **Event-driven trigger on agent completion (`Stop` hook).** A `Stop` hook in the target repo's `.claude/settings.json`, gated on `FACTORY_DISPATCH=1`, pokes a coalescing `POST /api/trigger/:repo` in [server.mjs](../../../server.mjs) so an agent finishing fires the *next* tick in seconds rather than at the next interval. Removes latency in the window fail-fast can't (agent→next-stage). Cost: confirm `Stop` fires in `--bg` (**O1**); a new coalescing endpoint (per-repo lock; a *dropped* trigger = a dropped transition, so it must coalesce, not 409); route launchd through the same lock. **Only worth building if faster polling's latency floor proves too high.** Deferred pending the measurement below.
 5. **Handle the remote CI-green gate.** The one transition neither faster polling-with-fail-fast nor a `Stop` hook catches locally. Options: (a) keep a short poll purely for the brief "PR open, CI pending" state — cheapest; (b) have the developer run `gh pr checks --watch` so its `Stop` fires only once CI settles — folds the remote event into a local one, at the cost of agent wall-clock; (c) GitHub webhooks via a tunnel — most infrastructure, likely over-engineering for a single-user local factory. Lean (a).
 
-## Recommendation
+## Proposed Architecture & Design (the recommendation)
 
 **Measure, then take the cheap path first.** Instrument one real end-to-end task and attribute its wall-clock to *agent work* / *CI* / *tick-wait*. Then:
 
@@ -126,7 +126,7 @@ So fail-fast needs its **own short threshold**: transcript touched within ~T sec
 
 The event-driven design is the optimization of last resort, reached only if the data says polling — even fast, cheap, fail-fast polling — leaves real latency on the table.
 
-## Open questions
+## Risks & open questions
 
 - **O1 — Does `Stop` fire for `--bg`/headless sessions?** Blocks Option 4 entirely. Confirm empirically before building any hook.
 - **O2 — Fail-fast threshold `T`.** What short window (60 s? 120 s?) reliably means "still actively working" without prematurely calling a thinking-paused agent done? Pick against real transcript-write cadence.
@@ -134,7 +134,7 @@ The event-driven design is the optimization of last resort, reached only if the 
 - **O4 — Is a PR ever opened mid-session** (before the developer finishes)? The fail-fast correctness argument assumes the PR is opened at the end. If any role opens a draft PR early, the no-PR-yet fail-fast must key off "no PR *recorded in state* yet" and re-check once one appears. Audit the personas.
 - **O5 — `gh auth status` every tick.** It's the one unconditional API call on *every* tick, including idle ones. Can it be lazy (only re-check on a real `gh` auth failure) or cached for N minutes, to make idle ticks cost *zero* API calls?
 - **O6 — Heartbeat vs. audit split.** Where does `lastTickAt` live (state.json? a `.heartbeat` file?) and does `--status` / the UI read it for liveness so the audit log can go transition-only?
-- **O7 — Budget interaction at speed.** Faster ticks reach the same dispatches sooner, so `budget-guard`'s 8/300-min cap ([ADR 006](docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md)) is hit earlier in wall-clock (same total spend, earlier pause). Confirm that's understood/desired, not a surprise.
+- **O7 — Budget interaction at speed.** Faster ticks reach the same dispatches sooner, so `budget-guard`'s 8/300-min cap ([ADR 006](../../../docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md)) is hit earlier in wall-clock (same total spend, earlier pause). Confirm that's understood/desired, not a surprise.
 - **O8 — launchd on a sleeping/battery Mac.** A 1-min timer means a catch-up fire on wake and steady wake-ups; confirm that's acceptable on laptop power, or gate cadence on AC.
 
 ## Rollout (once measured)
@@ -143,4 +143,4 @@ The event-driven design is the optimization of last resort, reached only if the 
 2. Land **log dedup** (Option 2) + a **heartbeat** (O6) — makes any faster cadence safe to read. Low risk, do regardless.
 3. Land **fail-fast** (Option 3) with the short threshold (O2) and, if cheap, the recorded-cwd stat (O3).
 4. **Shorten `StartInterval`** to the measured sweet spot (start ~60–120 s). Watch one full autonomous cycle for cost, noise, and any double-dispatch.
-5. **Only if** step 1 showed sub-minute latency matters: confirm O1, then add the `Stop` hook (Option 4) + a CI-gate strategy (Option 5), routing all triggers through one coalescing per-repo lock. Same "earn the gate" posture as [ADR 006](docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md).
+5. **Only if** step 1 showed sub-minute latency matters: confirm O1, then add the `Stop` hook (Option 4) + a CI-gate strategy (Option 5), routing all triggers through one coalescing per-repo lock. Same "earn the gate" posture as [ADR 006](../../../docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md).

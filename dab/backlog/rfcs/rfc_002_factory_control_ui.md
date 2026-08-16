@@ -2,9 +2,9 @@
 
 ## Status
 
-**Implemented.** The local dashboard (`server.mjs` + `ui/`) exists and has grown past this RFC's original MVP scope: the tick button with SSE streaming, the decision-log timeline, and repo/config views described below all shipped, plus features this RFC didn't anticipate — kill-stuck-session, a live processes view, bug-report snapshotting, and the cross-repo portfolio view ([RFC 005](RFC_005_SPRINT_ORIENTED_PLANNING.md) §6).
+**Implemented.** The local dashboard (`server.mjs` + `ui/`) exists and has grown past this RFC's original MVP scope: the tick button with SSE streaming, the decision-log timeline, and repo/config views described below all shipped, plus features this RFC didn't anticipate — kill-stuck-session, a live processes view, bug-report snapshotting, and the cross-repo portfolio view ([RFC 005](rfc_005_sprint_oriented_planning.md) §6).
 
-## Motivation
+## Context & Motivation
 
 Today the factory is driven entirely from the CLI:
 
@@ -26,7 +26,7 @@ That works, but it's friction: commands to remember, JSON to hand-edit, JSONL to
 ## Non-goals
 
 - **Not a hosted/cloud app.** The factory is inherently local — local repos, local `claude --bg`, local `gh`/`dab`. The UI's backend runs on the user's own machine, **localhost-only**. There is no multi-user or remote-control story.
-- **Not a second brain.** The UI must never re-implement `decide()` or hold authoritative state. It is a *view + thin control surface*; the orchestrator stays the single deterministic source of truth ([ADR 001](../architecture/adr/ADR_001_DETERMINISTIC_ORCHESTRATOR.md), [ADR 002](../architecture/adr/ADR_002_RECONCILE_STATE_FROM_REALITY.md)).
+- **Not a second brain.** The UI must never re-implement `decide()` or hold authoritative state. It is a *view + thin control surface*; the orchestrator stays the single deterministic source of truth ([ADR 001](../../../docs/architecture/adr/ADR_001_DETERMINISTIC_ORCHESTRATOR.md), [ADR 002](../../../docs/architecture/adr/ADR_002_RECONCILE_STATE_FROM_REALITY.md)).
 - **Not a CLI replacement.** The CLI stays the primitive; the UI shells out to it.
 
 ## Background: the state is already in files
@@ -44,7 +44,7 @@ A UI is mostly a *reader*, because the factory already externalizes everything:
 
 So the UI needs no new state — it surfaces these and offers thin actions over the existing CLI.
 
-## Proposal
+## Proposed Architecture & Design
 
 ### Shape: a minimal local server + single-page dashboard
 
@@ -85,7 +85,7 @@ A button that runs the orchestrator is legitimate and safe: it is the **user** t
 
 ### Autopilot
 
-"Autopilot ON" is the visible, one-toggle form of [ADR 006](../architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md)'s "relax the gates" end state:
+"Autopilot ON" is the visible, one-toggle form of [ADR 006](../../../docs/architecture/adr/ADR_006_HUMAN_MERGE_GATE_AND_BUDGET.md)'s "relax the gates" end state:
 - Arms the scheduled loop (generates + loads the launchd plist at the chosen interval; optionally `caffeinate`).
 - Optionally flips `autoMerge` on so the loop closes PRs itself.
 - The `budget` cap stays in force as the always-on safety limiter, with current usage shown.

@@ -859,7 +859,7 @@ export function decide(config, state) {
   // i.e. today's behaviour. The in-flight loop above always runs first, so already-started work
   // keeps advancing regardless of this cap — the cap only gates *starting* something new. Raising it
   // is the WIP half of parallelism; the fan-out to *different* ready tasks also needs dab to exclude
-  // in-flight tasks / return a ready-list, which it can't yet — see docs/rfcs/RFC_001.
+  // in-flight tasks / return a ready-list, which it can't yet — see dab/backlog/rfcs/rfc_001_parallel_task_execution.md.
   const inFlightIds = Object.keys(state.tasks).filter((id) => state.tasks[id].branch);
   const wipLimit = config.maxConcurrentTasks ?? 1;
   if (inFlightIds.length >= wipLimit) {

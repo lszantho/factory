@@ -4,7 +4,7 @@ Index of ADRs for the **factory** — the autonomous multi-agent development pip
 
 These are the concrete decisions; the shared philosophy behind them lives in [../PRINCIPLES.md](../PRINCIPLES.md).
 
-**Terminology note:** ADRs 001–008 predate [RFC 005](../../rfcs/RFC_005_SPRINT_ORIENTED_PLANNING.md)'s total rename and still say "epic" where current code and docs say **sprint**. Left as written — they record decisions made when that was the term; see RFC 005 for the rename itself.
+**Terminology note:** ADRs 001–008 predate [RFC 005](../../../dab/backlog/rfcs/rfc_005_sprint_oriented_planning.md)'s total rename and still say "epic" where current code and docs say **sprint**. Left as written — they record decisions made when that was the term; see RFC 005 for the rename itself.
 
 | # | Title | Status | Summary |
 | --- | --- | --- | --- |

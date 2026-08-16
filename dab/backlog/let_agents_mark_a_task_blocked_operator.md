@@ -81,4 +81,4 @@ The difference between those two is luck. A structural stop is what removes it.
 
 ## Notes
 
-Related: [RFC 006](../../docs/rfcs/RFC_006_COMPLETE_OBSERVATION_GAPS.md) §2.3 — nothing currently distinguishes retrying from retrying something impossible. This task attacks the same problem from the agent's side: the orchestrator learning to give up is one half, an agent able to say *"this cannot be done"* is the other.
+Related: [RFC 006](rfcs/rfc_006_complete_observation_gaps.md) §2.3 — nothing currently distinguishes retrying from retrying something impossible. This task attacks the same problem from the agent's side: the orchestrator learning to give up is one half, an agent able to say *"this cannot be done"* is the other.
