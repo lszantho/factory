@@ -1,0 +1,19 @@
+{
+  "boardDir": "dab",
+  "rulesDir": ".agents",
+  "templatesDir": "dab/templates",
+  "validation": {
+    "enforceRelativeLinks": true,
+    "requiredTaskHeadings": [
+      "Requirements",
+      "Tasks",
+      "Verification Plan"
+    ],
+    "requiredRfcHeadings": [
+      "Context & Motivation",
+      "Proposed Architecture & Design",
+      "Alternatives Considered",
+      "Risks & Open Questions"
+    ]
+  }
+}
